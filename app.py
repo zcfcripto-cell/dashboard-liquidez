@@ -5,6 +5,20 @@ st.set_page_config(page_title="Dashboard Piscinas Liquidez", layout="wide")
 
 st.title("📊 Dashboard de Controlo de Piscinas de Liquidez")
 
+# Lista de DEXs/Protocolos populares
+DEX_OPTIONS = [
+    "Uniswap v3",
+    "Raydium",
+    "Orca",
+    "Kamino",
+    "PancakeSwap",
+    "Curve",
+    "Aerodrome",
+    "Meteora",
+    "Trader Joe",
+    "Outro (Introduzir manualmente)",
+]
+
 if "pools" not in st.session_state:
   st.session_state.pools = pd.DataFrame(
       columns=[
@@ -20,7 +34,15 @@ if "pools" not in st.session_state:
 
 with st.sidebar.form("nova_pool"):
   st.header("Adicionar / Atualizar Pool")
-  protocolo = st.text_input("Protocolo", "Uniswap v3")
+
+  # Caixa de seleção para Protocolo/DEX
+  protocolo_selecionado = st.selectbox("Protocolo / DEX", DEX_OPTIONS)
+
+  if protocolo_selecionado == "Outro (Introduzir manualmente)":
+    protocolo = st.text_input("Nome do Protocolo", "Minha DEX Custom")
+  else:
+    protocolo = protocolo_selecionado
+
   par = st.text_input("Par de Cripto", "ETH / USDC")
   v_entrada = st.number_input("Valor de Entrada ($)", min_value=0.0, value=1000.0)
   v_saida = st.number_input("Valor Atual ou Saída ($)", min_value=0.0, value=1050.0)
