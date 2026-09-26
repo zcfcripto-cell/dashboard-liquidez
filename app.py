@@ -33,7 +33,7 @@ st.markdown(
 
 st.title("📊 Gestor de Piscinas de Liquidez")
 
-# Inicializar bases de dados na sessão com os novos dados padrão da pool SOL/PUMP
+# Inicializar bases de dados na sessão
 if "pools_data" not in st.session_state:
   st.session_state.pools_data = [
       {
@@ -65,13 +65,21 @@ DEX_OPTIONS = [
 ]
 
 
-# Pop-up modal dinâmico com campo para atualizar a Data de Entrada
+# Pop-up modal dinâmico com suporte corrigido para Data de Entrada
 @st.dialog("Atualizar Pool")
 def modal_atualizar_pool(pool_id):
-  pool = next(
-      (p for p in st.session_state.pools_data if p["id"] == pool_id), None
+  # Procurar o índice da pool na lista para atualizar diretamente
+  index = next(
+      (
+          i
+          for i, p in enumerate(st.session_state.pools_data)
+          if p["id"] == pool_id
+      ),
+      None,
   )
-  if pool:
+
+  if index is not None:
+    pool = st.session_state.pools_data[index]
     st.subheader(f"Atualizar Pool - {pool['par']}")
 
     novo_valor_atual = st.number_input(
@@ -79,23 +87,35 @@ def modal_atualizar_pool(pool_id):
         min_value=0.0,
         value=float(pool["valor_atual"]),
         step=1.0,
+        key=f"modal_val_{pool_id}",
     )
+
     novas_fees_pendentes = st.number_input(
         "Fees Acumuladas Pendentes (USD)",
         min_value=0.0,
         value=float(pool["fees_nao_coletadas"]),
         step=0.1,
+        key=f"modal_fees_{pool_id}",
     )
+
+    # Converter para datetime.date se vier como string
+    data_ori = pool.get("data_entrada", datetime.date.today())
+    if isinstance(data_ori, str):
+      data_ori = datetime.datetime.strptime(data_ori, "%Y-%m-%d").date()
+
     nova_data_entrada = st.date_input(
-        "Data de Entrada",
-        value=pool.get("data_entrada", datetime.date.today()),
+        "Data de Entrada", value=data_ori, key=f"modal_date_{pool_id}"
     )
 
     col_cancel, col_save = st.columns(2)
     if col_save.button("Salvar", type="primary", use_container_width=True):
-      pool["valor_atual"] = novo_valor_atual
-      pool["fees_nao_coletadas"] = novas_fees_pendentes
-      pool["data_entrada"] = nova_data_entrada
+      # Atualização direta no objeto session_state
+      st.session_state.pools_data[index]["valor_atual"] = novo_valor_atual
+      st.session_state.pools_data[index]["fees_nao_coletadas"] = (
+          novas_fees_pendentes
+      )
+      st.session_state.pools_data[index]["data_entrada"] = nova_data_entrada
+
       st.success(f"Pool {pool['par']} atualizada com sucesso!")
       st.rerun()
 
@@ -160,14 +180,17 @@ if not st.session_state.pools_data:
   )
 else:
   for pool in st.session_state.pools_data:
-    # Garantir compatibilidade
     if "fees_sacadas" not in pool:
       pool["fees_sacadas"] = pool.get("fees_acumuladas", 0.0)
     if "fees_reinvestidas" not in pool:
       pool["fees_reinvestidas"] = 0.0
 
-    # Cálculos
-    dias_ativos = (datetime.date.today() - pool["data_entrada"]).days
+    # Tratamento de segurança da Data de Entrada
+    dt_entrada = pool.get("data_entrada", datetime.date.today())
+    if isinstance(dt_entrada, str):
+      dt_entrada = datetime.datetime.strptime(dt_entrada, "%Y-%m-%d").date()
+
+    dias_ativos = (datetime.date.today() - dt_entrada).days
     if dias_ativos <= 0:
       dias_ativos = 1
 
