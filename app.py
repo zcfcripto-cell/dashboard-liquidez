@@ -177,37 +177,53 @@ else:
             delta_color="normal" if pnl >= 0 else "inverse",
         )
         m4.metric("APR Est.", f"{apr:.2f}%")
-        m5.metric("Fees Acum.", f"${pool['fees_nao_coletadas']:,.2f}")
+        m5.metric("Fees Pendentes", f"${pool['fees_nao_coletadas']:,.2f}")
 
       # Blocos de métricas secundárias
       b1, b2, b3, b4 = st.columns(4)
       b1.info(f"**Valor Inicial:** ${pool['valor_inicial']:,.2f}")
       b2.info(f"**Dias Ativos:** {dias_ativos} dias")
-      b3.info(f"**Total Fees Coletadas:** ${pool['fees_acumuladas']:,.2f}")
+      b3.info(f"**Total Fees Sacadas:** ${pool['fees_acumuladas']:,.2f}")
       b4.info(
           f"**Range de Preço:** ${pool['range_min']:,.0f} -"
           f" ${pool['range_max']:,.0f}"
       )
 
-      # Botões de Ação
-      btn1, btn2, btn3, btn4 = st.columns(4)
+      # Botões de Ação das Fees e Gestão
+      btn1, btn2, btn3, btn4, btn5 = st.columns(5)
 
-      if btn1.button(f"✏️ Atualizar / Editar", key=f"edit_{pool['id']}"):
+      if btn1.button(f"🔄 Reinvestir Fees", key=f"reinvest_{pool['id']}"):
+        if pool["fees_nao_coletadas"] > 0:
+          pool["valor_atual"] += pool["fees_nao_coletadas"]
+          fees_temp = pool["fees_nao_coletadas"]
+          pool["fees_nao_coletadas"] = 0.0
+          st.success(
+              f"${fees_temp:,.2f} em fees reinvestidos na piscina com sucesso!"
+          )
+          st.rerun()
+        else:
+          st.warning("Não há fees pendentes para reinvestir.")
+
+      if btn2.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
+        if pool["fees_nao_coletadas"] > 0:
+          pool["fees_acumuladas"] += pool["fees_nao_coletadas"]
+          fees_temp = pool["fees_nao_coletadas"]
+          pool["fees_nao_coletadas"] = 0.0
+          st.success(f"${fees_temp:,.2f} sacados para a carteira!")
+          st.rerun()
+        else:
+          st.warning("Não há fees pendentes para sacar.")
+
+      if btn3.button(f"✏️ Editar", key=f"edit_{pool['id']}"):
         st.toast(f"Editar Pool #{pool['id']} selecionado")
 
-      if btn2.button(f"💵 Coletar Fees", key=f"fee_{pool['id']}"):
-        pool["fees_acumuladas"] += pool["fees_nao_coletadas"]
-        pool["fees_nao_coletadas"] = 0.0
-        st.success("Fees coletadas e somadas ao total!")
-        st.rerun()
-
-      if btn3.button(
-          f"🔒 Fechar / Alterar Estado", key=f"close_{pool['id']}"
+      if btn4.button(
+          f"🔒 Fechar / Ativar", key=f"close_{pool['id']}"
       ):
         pool["estado"] = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
         st.rerun()
 
-      if btn4.button(f"🗑️ Excluir", key=f"del_{pool['id']}"):
+      if btn5.button(f"🗑️ Excluir", key=f"del_{pool['id']}"):
         st.session_state.pools_data = [
             p for p in st.session_state.pools_data if p["id"] != pool["id"]
         ]
