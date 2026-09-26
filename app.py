@@ -80,10 +80,12 @@ if "pools_data" not in st.session_state:
       }
   ]
 
+if "ocultar_detalhes" not in st.session_state:
+  st.session_state.ocultar_detalhes = False
+
 DEX_OPTIONS = [
     "Raydium",
     "Uniswap v3",
-    "Uniswap v4",
     "Orca",
     "Kamino",
     "PancakeSwap",
@@ -150,30 +152,8 @@ def modal_atualizar_pool(pool_id):
 with st.sidebar:
   st.header("➕ Adicionar Nova Pool")
 
-  # Inicialização de chaves para limpar os campos após criar a pool
-  if "input_par" not in st.session_state:
-    st.session_state["input_par"] = ""
-  if "input_rede" not in st.session_state:
-    st.session_state["input_rede"] = ""
-  if "input_v_init" not in st.session_state:
-    st.session_state["input_v_init"] = 0.0
-  if "input_v_atual" not in st.session_state:
-    st.session_state["input_v_atual"] = 0.0
-  if "input_f_sacadas" not in st.session_state:
-    st.session_state["input_f_sacadas"] = 0.0
-  if "input_f_reinvestidas" not in st.session_state:
-    st.session_state["input_f_reinvestidas"] = 0.0
-  if "input_fees_pendentes" not in st.session_state:
-    st.session_state["input_fees_pendentes"] = 0.0
-  if "input_r_min" not in st.session_state:
-    st.session_state["input_r_min"] = 0.0
-  if "input_r_max" not in st.session_state:
-    st.session_state["input_r_max"] = 0.0
-  if "input_data_in" not in st.session_state:
-    st.session_state["input_data_in"] = datetime.date.today()
-
   with st.form("nova_pool_form", clear_on_submit=True):
-    par = st.text_input("Par (ex: SOL/USDC)", key="form_par")
+    par = st.text_input("Par (ex: COIN/USDC)", key="form_par")
     rede = st.text_input("Rede / Plataforma (ex: SOLANA)", key="form_rede")
     dex = st.selectbox("DEX", DEX_OPTIONS, key="form_dex")
     v_init = st.number_input("Valor Inicial ($)", min_value=0.0, key="form_v_init")
@@ -224,220 +204,311 @@ with st.sidebar:
     st.session_state.pools_data = []
     st.rerun()
 
+# -------------------------------------------------------------
+# CÁLCULOS DO AGREGADO GERAL (TOPO)
+# -------------------------------------------------------------
+total_liquidez = sum(p["valor_atual"] for p in st.session_state.pools_data)
+total_fees_geradas = sum(
+    p.get("fees_sacadas", 0.0) + p.get("fees_reinvestidas", 0.0)
+    for p in st.session_state.pools_data
+)
+
+# Cálculo do APR médio das fees
+aprs_com_peso = []
+pesos_iniciais = []
+
+dt_hoje = datetime.date.today()
+for p in st.session_state.pools_data:
+  dt_ent = p.get("data_entrada", dt_hoje)
+  if isinstance(dt_ent, str):
+    dt_ent = datetime.datetime.strptime(dt_ent, "%Y-%m-%d").date()
+
+  dias = (dt_hoje - dt_ent).days
+  if dias <= 0:
+    dias = 1
+
+  total_fees_pool = (
+      p.get("fees_sacadas", 0.0)
+      + p.get("fees_reinvestidas", 0.0)
+      + p.get("fees_nao_coletadas", 0.0)
+  )
+  v_init = p.get("valor_inicial", 0.0)
+
+  if v_init > 0:
+    apr_p = (total_fees_pool / v_init) * (365 / dias) * 100
+    aprs_com_peso.append(apr_p * v_init)
+    pesos_iniciais.append(v_init)
+
+total_valor_inicial = sum(pesos_iniciais)
+media_apr_fees = (
+    sum(aprs_com_peso) / total_valor_inicial if total_valor_inicial > 0 else 0.0
+)
+
+# EXIBIÇÃO DAS MÉTRICAS AGREGADAS NO TOPO
+st.markdown("### 📌 Resumo Geral do Portfólio")
+col_top1, col_top2, col_top3, col_top4 = st.columns([2, 2, 2, 2])
+
+with col_top1:
+  st.metric("Total Liquidez", f"${total_liquidez:,.2f}")
+with col_top2:
+  st.metric("Total Fees Geradas", f"${total_fees_geradas:,.2f}")
+with col_top3:
+  st.metric("Média do APR das Fees", f"{media_apr_fees:.2f}%")
+with col_top4:
+  # Botão de Esconder / Mostrar Detalhes
+  label_btn = (
+      "👁️ Mostrar Detalhes das Pools"
+      if st.session_state.ocultar_detalhes
+      else "🙈 Esconder Detalhes das Pools"
+  )
+  if st.button(label_btn, use_container_width=True):
+    st.session_state.ocultar_detalhes = not st.session_state.ocultar_detalhes
+    st.rerun()
+
+st.markdown("---")
+
 # Exibir Pools
 if not st.session_state.pools_data:
   st.info(
       "Nenhuma piscina registada. Utiliza o painel lateral para adicionar."
   )
 else:
-  for pool in st.session_state.pools_data:
-    if "fees_sacadas" not in pool:
-      pool["fees_sacadas"] = pool.get("fees_acumuladas", 0.0)
-    if "fees_reinvestidas" not in pool:
-      pool["fees_reinvestidas"] = 0.0
+  # SE A OPÇÃO DE ESCONDER DETALHES ESTIVER ATIVA: MOSTRA UMA TABELA DE RESUMO
+  if st.session_state.ocultar_detalhes:
+    resumo_list = []
+    for p in st.session_state.pools_data:
+      f_sac = p.get("fees_sacadas", 0.0)
+      f_reinv = p.get("fees_reinvestidas", 0.0)
+      f_pend = p.get("fees_nao_coletadas", 0.0)
+      tot_fees = f_sac + f_reinv + f_pend
 
-    # Tratamento da Data de Entrada
-    dt_entrada = pool.get("data_entrada", datetime.date.today())
-    if isinstance(dt_entrada, str):
-      dt_entrada = datetime.datetime.strptime(dt_entrada, "%Y-%m-%d").date()
+      resumo_list.append({
+          "Par": p["par"],
+          "Plataforma": p["rede"],
+          "Estado": p["estado"],
+          "Valor Inicial ($)": f"${p['valor_inicial']:,.2f}",
+          "Valor Atual ($)": f"${p['valor_atual']:,.2f}",
+          "Fees Geradas ($)": f"${f_sac + f_reinv:,.2f}",
+          "Fees Pendentes ($)": f"${f_pend:,.2f}",
+          "Range Mín": f"{p['range_min']:,.2f}",
+          "Range Máx": f"{p['range_max']:,.2f}",
+      })
+    df_resumo = pd.DataFrame(resumo_list)
+    st.dataframe(df_resumo, use_container_width=True)
 
-    dt_hoje = datetime.date.today()
-    if dt_entrada >= dt_hoje:
-      dt_entrada = dt_hoje - datetime.timedelta(days=1)
+  else:
+    # MODO DETALHADO (COMPLETO)
+    for pool in st.session_state.pools_data:
+      if "fees_sacadas" not in pool:
+        pool["fees_sacadas"] = pool.get("fees_acumuladas", 0.0)
+      if "fees_reinvestidas" not in pool:
+        pool["fees_reinvestidas"] = 0.0
 
-    dias_totais = (dt_hoje - dt_entrada).days
-    if dias_totais <= 0:
-      dias_totais = 1
+      # Tratamento da Data de Entrada
+      dt_entrada = pool.get("data_entrada", datetime.date.today())
+      if isinstance(dt_entrada, str):
+        dt_entrada = datetime.datetime.strptime(dt_entrada, "%Y-%m-%d").date()
 
-    total_fees_geradas = (
-        pool["fees_sacadas"]
-        + pool["fees_reinvestidas"]
-        + pool["fees_nao_coletadas"]
-    )
+      dt_hoje = datetime.date.today()
+      if dt_entrada >= dt_hoje:
+        dt_entrada = dt_hoje - datetime.timedelta(days=1)
 
-    pnl = (pool["valor_atual"] + pool["fees_sacadas"]) - pool["valor_inicial"]
-    variacao_pct = (
-        (
-            (pool["valor_atual"] - pool["valor_inicial"])
-            / pool["valor_inicial"]
-        )
-        * 100
-        if pool["valor_inicial"] > 0
-        else 0
-    )
+      dias_totais = (dt_hoje - dt_entrada).days
+      if dias_totais <= 0:
+        dias_totais = 1
 
-    apr_total = (
-        (total_fees_geradas / pool["valor_inicial"])
-        * (365 / dias_totais)
-        * 100
-        if pool["valor_inicial"] > 0
-        else 0
-    )
-
-    # Cartão Container
-    with st.container():
-      c_head1, c_head2 = st.columns([2, 3])
-
-      with c_head1:
-        badge_class = (
-            "badge-ativa" if pool["estado"] == "Ativa" else "badge-fechada"
-        )
-        st.markdown(
-            f"### 🪙 **{pool['par']}** <span class='{badge_class}'>{pool['estado']}</span>",
-            unsafe_allow_html=True,
-        )
-        st.caption(f"Plataforma: {pool['rede']}")
-
-      with c_head2:
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Valor Atual", f"${pool['valor_atual']:,.2f}")
-        m2.metric(
-            "Variação",
-            f"{variacao_pct:+.2f}%",
-            delta_color="normal" if variacao_pct >= 0 else "inverse",
-        )
-        m3.metric(
-            "PnL Total",
-            f"${pnl:+.2f}",
-            delta_color="normal" if pnl >= 0 else "inverse",
-        )
-        m4.metric("APR Total", f"{apr_total:.2f}%")
-        m5.metric("Fees Pendentes", f"${pool['fees_nao_coletadas']:,.2f}")
-
-      # Blocos de métricas secundárias
-      b1, b2, b3, b4 = st.columns(4)
-      b1.info(f"**Valor Inicial:** ${pool['valor_inicial']:,.2f}")
-      b2.info(f"**Dias Ativos Totais:** {dias_totais} dias")
-      b3.info(
-          f"**Fees (Sacadas / Reinvestidas):** ${pool['fees_sacadas']:,.2f} /"
-          f" ${pool['fees_reinvestidas']:,.2f}"
-      )
-      b4.info(
-          f"**Range de Preço:** {pool['range_min']:,.2f} - {pool['range_max']:,.2f}"
+      total_fees_geradas_pool = (
+          pool["fees_sacadas"]
+          + pool["fees_reinvestidas"]
+          + pool["fees_nao_coletadas"]
       )
 
-      # Botões de Ação
-      btn1, btn2, btn3, btn4, btn5 = st.columns(5)
-
-      if btn1.button(f"✏️ Atualizar Pool", key=f"edit_{pool['id']}"):
-        modal_atualizar_pool(pool["id"])
-
-      if btn2.button(f"🔄 Reinvestir Fees", key=f"reinvest_{pool['id']}"):
-        if pool["fees_nao_coletadas"] > 0:
-          fees_temp = pool["fees_nao_coletadas"]
-          pool["valor_atual"] += fees_temp
-          pool["fees_reinvestidas"] += fees_temp
-          pool["fees_nao_coletadas"] = 0.0
-          st.success(f"${fees_temp:,.2f} reinvestidos com sucesso!")
-          st.rerun()
-        else:
-          st.warning("Não há fees pendentes para reinvestir.")
-
-      if btn3.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
-        if pool["fees_nao_coletadas"] > 0:
-          fees_temp = pool["fees_nao_coletadas"]
-          pool["fees_sacadas"] += fees_temp
-          pool["fees_nao_coletadas"] = 0.0
-          st.success(f"${fees_temp:,.2f} sacados para a carteira!")
-          st.rerun()
-        else:
-          st.warning("Não há fees pendentes para sacar.")
-
-      if btn4.button(
-          f"🔒 Fechar / Ativar", key=f"close_{pool['id']}"
-      ):
-        pool["estado"] = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
-        st.rerun()
-
-      if btn5.button(f"🗑️ Excluir", key=f"del_{pool['id']}"):
-        st.session_state.pools_data = [
-            p for p in st.session_state.pools_data if p["id"] != pool["id"]
-        ]
-        st.rerun()
-
-      # -------------------------------------------------------------
-      # 1. GRÁFICO DE HISTÓRICO
-      # -------------------------------------------------------------
-      st.subheader("📈 Histórico de Liquidez")
-
-      slider_key = f"slider_range_{pool['id']}"
-      if slider_key not in st.session_state:
-        st.session_state[slider_key] = (dt_entrada, dt_hoje)
-
-      dt_inicio_sel, dt_fim_sel = st.session_state[slider_key]
-
-      full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
-      num_pontos = len(full_dates)
-
-      if num_pontos == 1:
-        simulated_values = [pool["valor_atual"]]
-      else:
-        np.random.seed(pool["id"])
-        ruido = np.cumsum(np.random.normal(0, 2, size=num_pontos))
-        ruido = ruido - ruido[0]
-        tendencia = np.linspace(
-            pool["valor_inicial"], pool["valor_atual"], num_pontos
-        )
-        simulated_values = tendencia + ruido
-        simulated_values[-1] = pool["valor_atual"]
-
-      df_full = pd.DataFrame(
-          {"Data": full_dates.date, "Liquidez ($)": simulated_values}
-      )
-
-      df_chart = df_full[
-          (df_full["Data"] >= dt_inicio_sel) & (df_full["Data"] <= dt_fim_sel)
-      ]
-
-      fig = px.line(
-          df_chart,
-          x="Data",
-          y="Liquidez ($)",
-          line_shape="spline",
-          markers=True,
-      )
-      fig.update_traces(line_color="#10b981", line_width=3)
-      fig.update_layout(
-          template="plotly_dark",
-          height=250,
-          margin=dict(l=20, r=20, t=10, b=10),
-          xaxis_title="",
-          yaxis_title="",
-      )
-      st.plotly_chart(fig, use_container_width=True)
-
-      # -------------------------------------------------------------
-      # 2. BARRA DE ROLAMENTO (ABAIXO DO GRÁFICO - AZUL E GROSSA)
-      # -------------------------------------------------------------
-      st.write("🟦 **Ajuste o Intervalo de Datas para calcular o APR:**")
-      selected_range = st.slider(
-          "Seleção de Intervalo",
-          min_value=dt_entrada,
-          max_value=dt_hoje,
-          value=st.session_state[slider_key],
-          format="YYYY-MM-DD",
-          key=slider_key,
-          label_visibility="collapsed",
-      )
-
-      # -------------------------------------------------------------
-      # 3. RESULTADOS DO APR
-      # -------------------------------------------------------------
-      dt_inicio_sel, dt_fim_sel = selected_range
-      dias_selecionados = (dt_fim_sel - dt_inicio_sel).days
-      if dias_selecionados <= 0:
-        dias_selecionados = 1
-
-      apr_periodo = (
-          (total_fees_geradas / pool["valor_inicial"])
-          * (365 / dias_selecionados)
+      pnl = (pool["valor_atual"] + pool["fees_sacadas"]) - pool["valor_inicial"]
+      variacao_pct = (
+          (
+              (pool["valor_atual"] - pool["valor_inicial"])
+              / pool["valor_inicial"]
+          )
           * 100
           if pool["valor_inicial"] > 0
           else 0
       )
 
-      c_res1, c_res2 = st.columns(2)
-      c_res1.info(f"📅 **Dias Selecionados:** {dias_selecionados} dias")
-      c_res2.success(f"⚡ **APR no Intervalo:** {apr_periodo:.2f}%")
+      apr_total = (
+          (total_fees_geradas_pool / pool["valor_inicial"])
+          * (365 / dias_totais)
+          * 100
+          if pool["valor_inicial"] > 0
+          else 0
+      )
 
-      st.markdown("---")
+      # Cartão Container
+      with st.container():
+        c_head1, c_head2 = st.columns([2, 3])
+
+        with c_head1:
+          badge_class = (
+              "badge-ativa" if pool["estado"] == "Ativa" else "badge-fechada"
+          )
+          st.markdown(
+              f"### 🪙 **{pool['par']}** <span"
+              f" class='{badge_class}'>{pool['estado']}</span>",
+              unsafe_allow_html=True,
+          )
+          st.caption(f"Plataforma: {pool['rede']}")
+
+        with c_head2:
+          m1, m2, m3, m4, m5 = st.columns(5)
+          m1.metric("Valor Atual", f"${pool['valor_atual']:,.2f}")
+          m2.metric(
+              "Variação",
+              f"{variacao_pct:+.2f}%",
+              delta_color="normal" if variacao_pct >= 0 else "inverse",
+          )
+          m3.metric(
+              "PnL Total",
+              f"${pnl:+.2f}",
+              delta_color="normal" if pnl >= 0 else "inverse",
+          )
+          m4.metric("APR Total", f"{apr_total:.2f}%")
+          m5.metric("Fees Pendentes", f"${pool['fees_nao_coletadas']:,.2f}")
+
+        # Blocos de métricas secundárias
+        b1, b2, b3, b4 = st.columns(4)
+        b1.info(f"**Valor Inicial:** ${pool['valor_inicial']:,.2f}")
+        b2.info(f"**Dias Ativos Totais:** {dias_totais} dias")
+        b3.info(
+            f"**Fees (Sacadas / Reinvestidas):** ${pool['fees_sacadas']:,.2f} /"
+            f" ${pool['fees_reinvestidas']:,.2f}"
+        )
+        b4.info(
+            f"**Range de Preço:** {pool['range_min']:,.2f} -"
+            f" {pool['range_max']:,.2f}"
+        )
+
+        # Botões de Ação
+        btn1, btn2, btn3, btn4, btn5 = st.columns(5)
+
+        if btn1.button(f"✏️ Atualizar Pool", key=f"edit_{pool['id']}"):
+          modal_atualizar_pool(pool["id"])
+
+        if btn2.button(f"🔄 Reinvestir Fees", key=f"reinvest_{pool['id']}"):
+          if pool["fees_nao_coletadas"] > 0:
+            fees_temp = pool["fees_nao_coletadas"]
+            pool["valor_atual"] += fees_temp
+            pool["fees_reinvestidas"] += fees_temp
+            pool["fees_nao_coletadas"] = 0.0
+            st.success(f"${fees_temp:,.2f} reinvestidos com sucesso!")
+            st.rerun()
+          else:
+            st.warning("Não há fees pendentes para reinvestir.")
+
+        if btn3.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
+          if pool["fees_nao_coletadas"] > 0:
+            fees_temp = pool["fees_nao_coletadas"]
+            pool["fees_sacadas"] += fees_temp
+            pool["fees_nao_coletadas"] = 0.0
+            st.success(f"${fees_temp:,.2f} sacados para a carteira!")
+            st.rerun()
+          else:
+            st.warning("Não há fees pendentes para sacar.")
+
+        if btn4.button(
+            f"🔒 Fechar / Ativar", key=f"close_{pool['id']}"
+        ):
+          pool["estado"] = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
+          st.rerun()
+
+        if btn5.button(f"🗑️ Excluir", key=f"del_{pool['id']}"):
+          st.session_state.pools_data = [
+              p for p in st.session_state.pools_data if p["id"] != pool["id"]
+          ]
+          st.rerun()
+
+        # -------------------------------------------------------------
+        # 1. GRÁFICO DE HISTÓRICO
+        # -------------------------------------------------------------
+        st.subheader("📈 Histórico de Liquidez")
+
+        slider_key = f"slider_range_{pool['id']}"
+        if slider_key not in st.session_state:
+          st.session_state[slider_key] = (dt_entrada, dt_hoje)
+
+        dt_inicio_sel, dt_fim_sel = st.session_state[slider_key]
+
+        full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
+        num_pontos = len(full_dates)
+
+        if num_pontos == 1:
+          simulated_values = [pool["valor_atual"]]
+        else:
+          np.random.seed(pool["id"])
+          ruido = np.cumsum(np.random.normal(0, 2, size=num_pontos))
+          ruido = ruido - ruido[0]
+          tendencia = np.linspace(
+              pool["valor_inicial"], pool["valor_atual"], num_pontos
+          )
+          simulated_values = tendencia + ruido
+          simulated_values[-1] = pool["valor_atual"]
+
+        df_full = pd.DataFrame(
+            {"Data": full_dates.date, "Liquidez ($)": simulated_values}
+        )
+
+        df_chart = df_full[
+            (df_full["Data"] >= dt_inicio_sel)
+            & (df_full["Data"] <= dt_fim_sel)
+        ]
+
+        fig = px.line(
+            df_chart,
+            x="Data",
+            y="Liquidez ($)",
+            line_shape="spline",
+            markers=True,
+        )
+        fig.update_traces(line_color="#10b981", line_width=3)
+        fig.update_layout(
+            template="plotly_dark",
+            height=250,
+            margin=dict(l=20, r=20, t=10, b=10),
+            xaxis_title="",
+            yaxis_title="",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # -------------------------------------------------------------
+        # 2. BARRA DE ROLAMENTO
+        # -------------------------------------------------------------
+        st.write("🟦 **Ajuste o Intervalo de Datas para calcular o APR:**")
+        selected_range = st.slider(
+            "Seleção de Intervalo",
+            min_value=dt_entrada,
+            max_value=dt_hoje,
+            value=st.session_state[slider_key],
+            format="YYYY-MM-DD",
+            key=slider_key,
+            label_visibility="collapsed",
+        )
+
+        # -------------------------------------------------------------
+        # 3. RESULTADOS DO APR
+        # -------------------------------------------------------------
+        dt_inicio_sel, dt_fim_sel = selected_range
+        dias_selecionados = (dt_fim_sel - dt_inicio_sel).days
+        if dias_selecionados <= 0:
+          dias_selecionados = 1
+
+        apr_periodo = (
+            (total_fees_geradas_pool / pool["valor_inicial"])
+            * (365 / dias_selecionados)
+            * 100
+            if pool["valor_inicial"] > 0
+            else 0
+        )
+
+        c_res1, c_res2 = st.columns(2)
+        c_res1.info(f"📅 **Dias Selecionados:** {dias_selecionados} dias")
+        c_res2.success(f"⚡ **APR no Intervalo:** {apr_periodo:.2f}%")
+
+        st.markdown("---")
