@@ -65,10 +65,9 @@ DEX_OPTIONS = [
 ]
 
 
-# Pop-up modal dinâmico com suporte corrigido para Data de Entrada
+# Pop-up modal com formulário explícito para garantir o envio dos dados
 @st.dialog("Atualizar Pool")
 def modal_atualizar_pool(pool_id):
-  # Procurar o índice da pool na lista para atualizar diretamente
   index = next(
       (
           i
@@ -82,45 +81,42 @@ def modal_atualizar_pool(pool_id):
     pool = st.session_state.pools_data[index]
     st.subheader(f"Atualizar Pool - {pool['par']}")
 
-    novo_valor_atual = st.number_input(
-        "Valor Atual (USD)",
-        min_value=0.0,
-        value=float(pool["valor_atual"]),
-        step=1.0,
-        key=f"modal_val_{pool_id}",
-    )
-
-    novas_fees_pendentes = st.number_input(
-        "Fees Acumuladas Pendentes (USD)",
-        min_value=0.0,
-        value=float(pool["fees_nao_coletadas"]),
-        step=0.1,
-        key=f"modal_fees_{pool_id}",
-    )
-
-    # Converter para datetime.date se vier como string
+    # Garantir formato de data válido
     data_ori = pool.get("data_entrada", datetime.date.today())
     if isinstance(data_ori, str):
       data_ori = datetime.datetime.strptime(data_ori, "%Y-%m-%d").date()
 
-    nova_data_entrada = st.date_input(
-        "Data de Entrada", value=data_ori, key=f"modal_date_{pool_id}"
-    )
-
-    col_cancel, col_save = st.columns(2)
-    if col_save.button("Salvar", type="primary", use_container_width=True):
-      # Atualização direta no objeto session_state
-      st.session_state.pools_data[index]["valor_atual"] = novo_valor_atual
-      st.session_state.pools_data[index]["fees_nao_coletadas"] = (
-          novas_fees_pendentes
+    with st.form(key=f"form_edit_modal_{pool_id}"):
+      novo_valor_atual = st.number_input(
+          "Valor Atual (USD)",
+          min_value=0.0,
+          value=float(pool["valor_atual"]),
+          step=1.0,
       )
-      st.session_state.pools_data[index]["data_entrada"] = nova_data_entrada
 
-      st.success(f"Pool {pool['par']} atualizada com sucesso!")
-      st.rerun()
+      novas_fees_pendentes = st.number_input(
+          "Fees Acumuladas Pendentes (USD)",
+          min_value=0.0,
+          value=float(pool["fees_nao_coletadas"]),
+          step=0.1,
+      )
 
-    if col_cancel.button("Cancelar", use_container_width=True):
-      st.rerun()
+      nova_data_entrada = st.date_input("Data de Entrada", value=data_ori)
+
+      submitted = st.form_submit_button(
+          "Guardar Alterações", type="primary", use_container_width=True
+      )
+
+      if submitted:
+        # Atualização direta na session_state
+        st.session_state.pools_data[index]["valor_atual"] = novo_valor_atual
+        st.session_state.pools_data[index]["fees_nao_coletadas"] = (
+            novas_fees_pendentes
+        )
+        st.session_state.pools_data[index]["data_entrada"] = nova_data_entrada
+
+        st.success(f"Pool {pool['par']} atualizada com sucesso!")
+        st.rerun()
 
 
 # Painel Lateral - Adicionar Nova Pool
@@ -185,7 +181,7 @@ else:
     if "fees_reinvestidas" not in pool:
       pool["fees_reinvestidas"] = 0.0
 
-    # Tratamento de segurança da Data de Entrada
+    # Tratamento da Data de Entrada
     dt_entrada = pool.get("data_entrada", datetime.date.today())
     if isinstance(dt_entrada, str):
       dt_entrada = datetime.datetime.strptime(dt_entrada, "%Y-%m-%d").date()
