@@ -48,7 +48,7 @@ if "pools_data" not in st.session_state:
           "fees_nao_coletadas": 6.89,
           "range_min": 19469.55,
           "range_max": 30933.15,
-          "data_entrada": datetime.date(2026, 9, 24),
+          "data_entrada": datetime.date(2026, 8, 20),
       }
   ]
 
