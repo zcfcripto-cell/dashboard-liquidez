@@ -6,7 +6,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Gestor de Piscinas de Liquidez", layout="wide")
 
-# Estilo personalizado para os cartões
+# Estilo personalizado para os cartões e barra azul personalizada
 st.markdown(
     """
     <style>
@@ -25,6 +25,20 @@ st.markdown(
         border-radius: 12px;
         font-size: 12px;
         font-weight: bold;
+    }
+    
+    /* Personalização da Barra de Rolamento (Slider) para ser Azul e Grossa */
+    div[data-baseweb="slider"] div {
+        height: 12px !important;
+    }
+    div[data-baseweb="slider"] div[role="slider"] {
+        height: 24px !important;
+        width: 24px !important;
+        background-color: #3b82f6 !important;
+        border: 2px solid #ffffff !important;
+    }
+    div[data-baseweb="slider"] > div > div {
+        background: #2563eb !important;
     }
     </style>
 """,
@@ -81,7 +95,6 @@ def modal_atualizar_pool(pool_id):
     pool = st.session_state.pools_data[index]
     st.subheader(f"Atualizar Pool - {pool['par']}")
 
-    # Garantir formato de data válido
     data_ori = pool.get("data_entrada", datetime.date.today())
     if isinstance(data_ori, str):
       data_ori = datetime.datetime.strptime(data_ori, "%Y-%m-%d").date()
@@ -185,9 +198,13 @@ else:
     if isinstance(dt_entrada, str):
       dt_entrada = datetime.datetime.strptime(dt_entrada, "%Y-%m-%d").date()
 
-    hoje = datetime.date.today()
-    if dt_entrada >= hoje:
-      dt_entrada = hoje - datetime.timedelta(days=1)
+    dt_hoje = datetime.date.today()
+    if dt_entrada >= dt_hoje:
+      dt_entrada = dt_hoje - datetime.timedelta(days=1)
+
+    dias_totais = (dt_hoje - dt_entrada).days
+    if dias_totais <= 0:
+      dias_totais = 1
 
     total_fees_geradas = (
         pool["fees_sacadas"]
@@ -201,6 +218,14 @@ else:
             (pool["valor_atual"] - pool["valor_inicial"])
             / pool["valor_inicial"]
         )
+        * 100
+        if pool["valor_inicial"] > 0
+        else 0
+    )
+
+    apr_total = (
+        (total_fees_geradas / pool["valor_inicial"])
+        * (365 / dias_totais)
         * 100
         if pool["valor_inicial"] > 0
         else 0
@@ -220,32 +245,6 @@ else:
         )
         st.caption(f"Plataforma: {pool['rede']}")
 
-      # Área de Seleção de Intervalo de Datas por Barra de Rolamento (Slider)
-      st.markdown("#### 📅 Filtrar Intervalo de Datas para Cálculo do APR")
-
-      intervalo_datas = st.slider(
-          "Arraste as extremidades para definir o intervalo de datas:",
-          min_value=dt_entrada,
-          max_value=hoje,
-          value=(dt_entrada, hoje),
-          format="YYYY-MM-DD",
-          key=f"slider_dates_{pool['id']}",
-      )
-
-      data_inicio_sel, data_fim_sel = intervalo_datas
-      dias_selecionados = (data_fim_sel - data_inicio_sel).days
-      if dias_selecionados <= 0:
-        dias_selecionados = 1
-
-      # Cálculo do APR dinâmico com base nos dias selecionados
-      apr_dinamico = (
-          (total_fees_geradas / pool["valor_inicial"])
-          * (365 / dias_selecionados)
-          * 100
-          if pool["valor_inicial"] > 0
-          else 0
-      )
-
       with c_head2:
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Valor Atual", f"${pool['valor_atual']:,.2f}")
@@ -259,17 +258,13 @@ else:
             f"${pnl:+.2f}",
             delta_color="normal" if pnl >= 0 else "inverse",
         )
-        m4.metric("APR (Intervalo)", f"{apr_dinamico:.2f}%")
+        m4.metric("APR Total", f"{apr_total:.2f}%")
         m5.metric("Fees Pendentes", f"${pool['fees_nao_coletadas']:,.2f}")
 
       # Blocos de métricas secundárias
       b1, b2, b3, b4 = st.columns(4)
       b1.info(f"**Valor Inicial:** ${pool['valor_inicial']:,.2f}")
-      b2.info(
-          f"**Período Selecionado:** {dias_selecionados} dias"
-          f" ({data_inicio_sel.strftime('%d/%m/%Y')} a"
-          f" {data_fim_sel.strftime('%d/%m/%Y')})"
-      )
+      b2.info(f"**Dias Ativos Totais:** {dias_totais} dias")
       b3.info(
           f"**Fees (Sacadas / Reinvestidas):** ${pool['fees_sacadas']:,.2f} /"
           f" ${pool['fees_reinvestidas']:,.2f}"
@@ -317,37 +312,67 @@ else:
         ]
         st.rerun()
 
-      # Gráfico de Histórico Dinâmico (Sincronizado com o Slider de Datas)
-      st.subheader("📈 Histórico de Liquidez (Período Selecionado)")
+      # Gráfico de Histórico Dinâmico
+      st.subheader("📈 Histórico de Liquidez")
 
-      # Gerar as datas exatas dentro do intervalo selecionado no slider
-      dates_full = pd.date_range(start=dt_entrada, end=hoje, freq="D")
-      num_pontos_total = len(dates_full)
+      # Gerar conjunto completo de dados
+      full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
+      num_pontos = len(full_dates)
 
-      if num_pontos_total == 1:
+      if num_pontos == 1:
         simulated_values = [pool["valor_atual"]]
       else:
         np.random.seed(pool["id"])
-        ruido = np.cumsum(np.random.normal(0, 2, size=num_pontos_total))
+        ruido = np.cumsum(np.random.normal(0, 2, size=num_pontos))
         ruido = ruido - ruido[0]
         tendencia = np.linspace(
-            pool["valor_inicial"], pool["valor_atual"], num_pontos_total
+            pool["valor_inicial"], pool["valor_atual"], num_pontos
         )
         simulated_values = tendencia + ruido
         simulated_values[-1] = pool["valor_atual"]
 
-      df_chart_full = pd.DataFrame(
-          {"Data": dates_full.date, "Liquidez ($)": simulated_values}
+      df_full = pd.DataFrame(
+          {"Data": full_dates.date, "Liquidez ($)": simulated_values}
       )
 
-      # Filtrar o DataFrame de acordo com o slider
-      df_chart_filtered = df_chart_full[
-          (df_chart_full["Data"] >= data_inicio_sel)
-          & (df_chart_full["Data"] <= data_fim_sel)
+      # BARRA DE ROLAMENTO (SLIDER) DE INTERVALO DE DATAS (Azul e Grossa)
+      st.markdown("**🔵 Ajuste o intervalo de datas para recalcular o APR:**")
+      selected_range = st.slider(
+          "Seleção de Intervalo",
+          min_value=dt_entrada,
+          max_value=dt_hoje,
+          value=(dt_entrada, dt_hoje),
+          format="YYYY-MM-DD",
+          key=f"slider_{pool['id']}",
+          label_visibility="collapsed",
+      )
+
+      dt_inicio_sel, dt_fim_sel = selected_range
+      dias_selecionados = (dt_fim_sel - dt_inicio_sel).days
+      if dias_selecionados <= 0:
+        dias_selecionados = 1
+
+      # Recalcular APR no intervalo selecionado
+      apr_periodo = (
+          (total_fees_geradas / pool["valor_inicial"])
+          * (365 / dias_selecionados)
+          * 100
+          if pool["valor_inicial"] > 0
+          else 0
+      )
+
+      # Filtrar dados para o gráfico
+      df_chart = df_full[
+          (df_full["Data"] >= dt_inicio_sel) & (df_full["Data"] <= dt_fim_sel)
       ]
 
+      # Exibir caixa com o APR do período selecionado
+      col_info1, col_info2 = st.columns(2)
+      col_info1.metric("Dias Selecionados", f"{dias_selecionados} dias")
+      col_info2.metric("APR Est. (No Intervalo)", f"{apr_periodo:.2f}%")
+
       fig = px.line(
-          df_chart_filtered,
+          df_chart,
           x="Data",
           y="Liquidez ($)",
           line_shape="spline",
