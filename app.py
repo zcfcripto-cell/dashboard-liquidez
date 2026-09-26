@@ -4,9 +4,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="Gestor de Piscinas de Liquidez", layout="wide")
+st.set_page_config(
+    page_title="Gestor de Piscinas de Liquidez",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-# CSS para forçar a BARRA AZUL GROSSA
+# Estilo personalizado para os cartões e barra azul grossa
 st.markdown(
     """
     <style>
@@ -33,17 +37,15 @@ st.markdown(
         padding-bottom: 15px !important;
     }
     div[data-baseweb="slider"] > div {
-        height: 16px !important; /* Altura/Espessura da Barra */
-        background-color: #1e3a8a !important; /* Azul escuro de fundo */
+        height: 16px !important;
+        background-color: #1e3a8a !important;
         border-radius: 8px !important;
     }
-    /* Intervalo selecionado (Barra interna) */
     div[data-baseweb="slider"] > div > div {
-        background-color: #2563eb !important; /* Azul vivo */
+        background-color: #2563eb !important;
         height: 16px !important;
         border-radius: 8px !important;
     }
-    /* Manípulos das pontas */
     div[data-baseweb="slider"] div[role="slider"] {
         height: 28px !important;
         width: 28px !important;
@@ -146,25 +148,52 @@ def modal_atualizar_pool(pool_id):
 # Painel Lateral - Adicionar Nova Pool
 with st.sidebar:
   st.header("➕ Adicionar Nova Pool")
-  with st.form("nova_pool_form"):
-    par = st.text_input("Par (ex: COIN/USDC)", "SOL/PUMP")
-    rede = st.text_input("Rede / Plataforma", "SOLANA")
-    dex = st.selectbox("DEX", DEX_OPTIONS)
-    v_init = st.number_input("Valor Inicial ($)", min_value=0.0, value=2203.0)
-    v_atual = st.number_input("Valor Atual ($)", min_value=0.0, value=2583.0)
+
+  # Inicialização de chaves para limpar os campos após criar a pool
+  if "input_par" not in st.session_state:
+    st.session_state["input_par"] = ""
+  if "input_rede" not in st.session_state:
+    st.session_state["input_rede"] = ""
+  if "input_v_init" not in st.session_state:
+    st.session_state["input_v_init"] = 0.0
+  if "input_v_atual" not in st.session_state:
+    st.session_state["input_v_atual"] = 0.0
+  if "input_f_sacadas" not in st.session_state:
+    st.session_state["input_f_sacadas"] = 0.0
+  if "input_f_reinvestidas" not in st.session_state:
+    st.session_state["input_f_reinvestidas"] = 0.0
+  if "input_fees_pendentes" not in st.session_state:
+    st.session_state["input_fees_pendentes"] = 0.0
+  if "input_r_min" not in st.session_state:
+    st.session_state["input_r_min"] = 0.0
+  if "input_r_max" not in st.session_state:
+    st.session_state["input_r_max"] = 0.0
+  if "input_data_in" not in st.session_state:
+    st.session_state["input_data_in"] = datetime.date.today()
+
+  with st.form("nova_pool_form", clear_on_submit=True):
+    par = st.text_input("Par (ex: COIN/USDC)", key="form_par")
+    rede = st.text_input("Rede / Plataforma (ex: SOLANA)", key="form_rede")
+    dex = st.selectbox("DEX", DEX_OPTIONS, key="form_dex")
+    v_init = st.number_input("Valor Inicial ($)", min_value=0.0, key="form_v_init")
+    v_atual = st.number_input(
+        "Valor Atual ($)", min_value=0.0, key="form_v_atual"
+    )
     f_sacadas = st.number_input(
-        "Total Fees Sacadas ($)", min_value=0.0, value=50.0
+        "Total Fees Sacadas ($)", min_value=0.0, key="form_f_sacadas"
     )
     f_reinvestidas = st.number_input(
-        "Total Fees Reinvestidas ($)", min_value=0.0, value=0.0
+        "Total Fees Reinvestidas ($)", min_value=0.0, key="form_f_reinvestidas"
     )
     fees_pendentes = st.number_input(
-        "Fees Pendentes ($)", min_value=0.0, value=6.89
+        "Fees Pendentes ($)", min_value=0.0, key="form_fees_pendentes"
     )
     col_r1, col_r2 = st.columns(2)
-    r_min = col_r1.number_input("Range Mín ($)", value=19469.55)
-    r_max = col_r2.number_input("Range Máx ($)", value=30933.15)
-    data_in = st.date_input("Data de Entrada", datetime.date(2026, 8, 20))
+    r_min = col_r1.number_input("Range Mín ($)", key="form_r_min")
+    r_max = col_r2.number_input("Range Máx ($)", key="form_r_max")
+    data_in = st.date_input(
+        "Data de Entrada", datetime.date.today(), key="form_data_in"
+    )
 
     submit = st.form_submit_button("Criar Pool")
     if submit:
@@ -173,18 +202,19 @@ with st.sidebar:
       )
       st.session_state.pools_data.append({
           "id": novo_id,
-          "par": par,
-          "rede": f"{dex} - {rede}",
+          "par": par if par else "POOL/USD",
+          "rede": f"{dex} - {rede if rede else 'Rede'}",
           "estado": "Ativa",
-          "valor_inicial": v_init,
-          "valor_atual": v_atual,
-          "fees_sacadas": f_sacadas,
-          "fees_reinvestidas": f_reinvestidas,
-          "fees_nao_coletadas": fees_pendentes,
-          "range_min": r_min,
-          "range_max": r_max,
+          "valor_inicial": float(v_init),
+          "valor_atual": float(v_atual),
+          "fees_sacadas": float(f_sacadas),
+          "fees_reinvestidas": float(f_reinvestidas),
+          "fees_nao_coletadas": float(fees_pendentes),
+          "range_min": float(r_min),
+          "range_max": float(r_max),
           "data_entrada": data_in,
       })
+
       st.success("Pool adicionada com sucesso!")
       st.rerun()
 
@@ -329,14 +359,12 @@ else:
       # -------------------------------------------------------------
       st.subheader("📈 Histórico de Liquidez")
 
-      # Chave para guardar o intervalo do slider no session_state
       slider_key = f"slider_range_{pool['id']}"
       if slider_key not in st.session_state:
         st.session_state[slider_key] = (dt_entrada, dt_hoje)
 
       dt_inicio_sel, dt_fim_sel = st.session_state[slider_key]
 
-      # Dados do histórico
       full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
       num_pontos = len(full_dates)
 
@@ -356,7 +384,6 @@ else:
           {"Data": full_dates.date, "Liquidez ($)": simulated_values}
       )
 
-      # Filtrar dados para o gráfico com base nas datas selecionadas
       df_chart = df_full[
           (df_full["Data"] >= dt_inicio_sel) & (df_full["Data"] <= dt_fim_sel)
       ]
@@ -393,7 +420,7 @@ else:
       )
 
       # -------------------------------------------------------------
-      # 3. RESULTADOS DO APR EM FUNÇÃO DO INTERVALO SELECIONADO
+      # 3. RESULTADOS DO APR
       # -------------------------------------------------------------
       dt_inicio_sel, dt_fim_sel = selected_range
       dias_selecionados = (dt_fim_sel - dt_inicio_sel).days
