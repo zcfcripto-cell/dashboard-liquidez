@@ -10,13 +10,6 @@ st.set_page_config(page_title="Gestor de Piscinas de Liquidez", layout="wide")
 st.markdown(
     """
     <style>
-    .pool-card {
-        background-color: #1e222d;
-        border-radius: 10px;
-        padding: 20px;
-        margin-bottom: 25px;
-        border: 1px solid #2a2e39;
-    }
     .badge-ativa {
         background-color: #10b981;
         color: white;
@@ -69,6 +62,41 @@ DEX_OPTIONS = [
     "Cetus",
     "Outro",
 ]
+
+
+# Pop-up modal dinamico com o par especifico da pool selecionada
+@st.dialog("Atualizar Pool")
+def modal_atualizar_pool(pool_id):
+  pool = next(
+      (p for p in st.session_state.pools_data if p["id"] == pool_id), None
+  )
+  if pool:
+    # Mostra o par de ativos dinamico da pool selecionada
+    st.subheader(f"Atualizar Pool - {pool['par']}")
+
+    novo_valor_atual = st.number_input(
+        "Valor Atual (USD)",
+        min_value=0.0,
+        value=float(pool["valor_atual"]),
+        step=1.0,
+    )
+    novas_fees_pendentes = st.number_input(
+        "Fees Acumuladas Pendentes (USD)",
+        min_value=0.0,
+        value=float(pool["fees_nao_coletadas"]),
+        step=0.1,
+    )
+
+    col_cancel, col_save = st.columns(2)
+    if col_save.button("Salvar", type="primary", use_container_width=True):
+      pool["valor_atual"] = novo_valor_atual
+      pool["fees_nao_coletadas"] = novas_fees_pendentes
+      st.success(f"Pool {pool['par']} atualizada com sucesso!")
+      st.rerun()
+
+    if col_cancel.button("Cancelar", use_container_width=True):
+      st.rerun()
+
 
 # Painel Lateral - Adicionar Nova Pool
 with st.sidebar:
@@ -189,10 +217,13 @@ else:
           f" ${pool['range_max']:,.0f}"
       )
 
-      # Botões de Ação das Fees e Gestão
+      # Botões de Ação
       btn1, btn2, btn3, btn4, btn5 = st.columns(5)
 
-      if btn1.button(f"🔄 Reinvestir Fees", key=f"reinvest_{pool['id']}"):
+      if btn1.button(f"✏️ Atualizar Pool", key=f"edit_{pool['id']}"):
+        modal_atualizar_pool(pool["id"])
+
+      if btn2.button(f"🔄 Reinvestir Fees", key=f"reinvest_{pool['id']}"):
         if pool["fees_nao_coletadas"] > 0:
           pool["valor_atual"] += pool["fees_nao_coletadas"]
           fees_temp = pool["fees_nao_coletadas"]
@@ -204,7 +235,7 @@ else:
         else:
           st.warning("Não há fees pendentes para reinvestir.")
 
-      if btn2.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
+      if btn3.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
         if pool["fees_nao_coletadas"] > 0:
           pool["fees_acumuladas"] += pool["fees_nao_coletadas"]
           fees_temp = pool["fees_nao_coletadas"]
@@ -213,9 +244,6 @@ else:
           st.rerun()
         else:
           st.warning("Não há fees pendentes para sacar.")
-
-      if btn3.button(f"✏️ Editar", key=f"edit_{pool['id']}"):
-        st.toast(f"Editar Pool #{pool['id']} selecionado")
 
       if btn4.button(
           f"🔒 Fechar / Ativar", key=f"close_{pool['id']}"
