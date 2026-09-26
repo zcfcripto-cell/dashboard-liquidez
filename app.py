@@ -1,36 +1,9 @@
-Criei a folha de cálculo no Google Sheets e preparei o código em Python com Streamlit para o teu dashboard interativo.
-
-[Dashboard_Piscinas_Liquidez_Crypto](https://docs.google.com/spreadsheets/d/1jS9N_HHYTeIAE9fxpBrWKF48wrRK1n7aEEvsJZhHg9E/edit?usp=drivesdk&ouid=116299652542920536093&utm_source=gemini)
-
-
-### Estrutura da Folha de Cálculo (Google Sheets)
-
-Podes estruturar as colunas da tua folha de cálculo da seguinte forma:
-
-1. **DEX / Protocolo** (ex.: Raydium, Uniswap v3, Orca)
-2. **Par de Cripto** (ex.: SOL/USDC)
-3. **Data de Entrada**
-4. **Valor de Entrada ($)**
-5. **Valor Atual / Levantamento ($)**
-6. **Rendimentos de Fees / Rewards ($)**
-7. **Lucro / Prejuízo Líquido ($)**: `= (E2 + F2) - D2`
-8. **ROI (%)**: `= G2 / D2`
-
----
-
-### Aplicação Interativa em Python (Streamlit)
-
-Para executar esta aplicação localmente, instala as dependências (`pip install streamlit pandas`) e executa o comando `streamlit run app.py` com o seguinte código:
-
-```python
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(
-    page_title="Dashboard Piscinas Liquidez", layout="wide"
-)
+st.set_page_config(page_title="Dashboard Piscinas Liquidez", layout="wide")
 
-st.title("📊 Dashboard de Control de Piscinas de Liquidez")
+st.title("📊 Dashboard de Controlo de Piscinas de Liquidez")
 
 if "pools" not in st.session_state:
   st.session_state.pools = pd.DataFrame(
@@ -81,5 +54,3 @@ if not st.session_state.pools.empty:
   st.dataframe(df, use_container_width=True)
 else:
   st.info("Nenhuma posição inserida. Utiliza o painel lateral para adicionar.")
-
-```
