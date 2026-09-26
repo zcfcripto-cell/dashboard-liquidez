@@ -33,27 +33,28 @@ st.markdown(
 
 st.title("📊 Gestor de Piscinas de Liquidez")
 
-# Inicializar bases de dados na sessão
+# Inicializar bases de dados na sessão com os novos dados padrão da pool SOL/PUMP
 if "pools_data" not in st.session_state:
   st.session_state.pools_data = [
       {
           "id": 1,
-          "par": "COIN / USDC",
-          "rede": "BYREAL - SOL",
+          "par": "SOL/PUMP",
+          "rede": "Raydium - SOLANA",
           "estado": "Ativa",
-          "valor_inicial": 169.0,
-          "valor_atual": 200.0,
-          "fees_acumuladas": 21.97,
-          "fees_nao_coletadas": 1.86,
-          "range_min": 150.0,
-          "range_max": 225.0,
-          "data_entrada": datetime.date(2026, 6, 7),
+          "valor_inicial": 2203.0,
+          "valor_atual": 2583.0,
+          "fees_sacadas": 50.0,
+          "fees_reinvestidas":50.0,
+          "fees_nao_coletadas": 6.89,
+          "range_min": 19469.55,
+          "range_max": 30933.15,
+          "data_entrada": datetime.date(2026, 9, 24),
       }
   ]
 
 DEX_OPTIONS = [
-    "Uniswap v3",
     "Raydium",
+    "Uniswap v3",
     "Orca",
     "Kamino",
     "PancakeSwap",
@@ -64,14 +65,13 @@ DEX_OPTIONS = [
 ]
 
 
-# Pop-up modal dinamico com o par especifico da pool selecionada
+# Pop-up modal dinâmico
 @st.dialog("Atualizar Pool")
 def modal_atualizar_pool(pool_id):
   pool = next(
       (p for p in st.session_state.pools_data if p["id"] == pool_id), None
   )
   if pool:
-    # Mostra o par de ativos dinamico da pool selecionada
     st.subheader(f"Atualizar Pool - {pool['par']}")
 
     novo_valor_atual = st.number_input(
@@ -102,21 +102,24 @@ def modal_atualizar_pool(pool_id):
 with st.sidebar:
   st.header("➕ Adicionar Nova Pool")
   with st.form("nova_pool_form"):
-    par = st.text_input("Par (ex: COIN/USDC)", "SOL/USDC")
-    rede = st.text_input("Rede / Plataforma", "BYREAL - SOL")
+    par = st.text_input("Par (ex: COIN/USDC)", "SOL/PUMP")
+    rede = st.text_input("Rede / Plataforma", "SOLANA")
     dex = st.selectbox("DEX", DEX_OPTIONS)
-    v_init = st.number_input("Valor Inicial ($)", min_value=0.0, value=169.0)
-    v_atual = st.number_input("Valor Atual ($)", min_value=0.0, value=200.0)
-    fees_totais = st.number_input(
-        "Total Fees Coletadas ($)", min_value=0.0, value=21.97
+    v_init = st.number_input("Valor Inicial ($)", min_value=0.0, value=2203.0)
+    v_atual = st.number_input("Valor Atual ($)", min_value=0.0, value=2583.0)
+    f_sacadas = st.number_input(
+        "Total Fees Sacadas ($)", min_value=0.0, value=50.0
+    )
+    f_reinvestidas = st.number_input(
+        "Total Fees Reinvestidas ($)", min_value=0.0, value=0.0
     )
     fees_pendentes = st.number_input(
-        "Fees Acumuladas Pendentes ($)", min_value=0.0, value=1.86
+        "Fees Pendentes ($)", min_value=0.0, value=6.89
     )
     col_r1, col_r2 = st.columns(2)
-    r_min = col_r1.number_input("Range Mín ($)", value=150.0)
-    r_max = col_r2.number_input("Range Máx ($)", value=225.0)
-    data_in = st.date_input("Data de Entrada", datetime.date.today())
+    r_min = col_r1.number_input("Range Mín ($)", value=19469.55)
+    r_max = col_r2.number_input("Range Máx ($)", value=30933.15)
+    data_in = st.date_input("Data de Entrada", datetime.date(2026, 9, 24))
 
     submit = st.form_submit_button("Criar Pool")
     if submit:
@@ -130,7 +133,8 @@ with st.sidebar:
           "estado": "Ativa",
           "valor_inicial": v_init,
           "valor_atual": v_atual,
-          "fees_acumuladas": fees_totais,
+          "fees_sacadas": f_sacadas,
+          "fees_reinvestidas": f_reinvestidas,
           "fees_nao_coletadas": fees_pendentes,
           "range_min": r_min,
           "range_max": r_max,
@@ -144,21 +148,31 @@ with st.sidebar:
     st.session_state.pools_data = []
     st.rerun()
 
-# Exibir Pools no formato de Cartões
+# Exibir Pools
 if not st.session_state.pools_data:
   st.info(
       "Nenhuma piscina registada. Utiliza o painel lateral para adicionar."
   )
 else:
   for pool in st.session_state.pools_data:
+    # Garantir compatibilidade
+    if "fees_sacadas" not in pool:
+      pool["fees_sacadas"] = pool.get("fees_acumuladas", 0.0)
+    if "fees_reinvestidas" not in pool:
+      pool["fees_reinvestidas"] = 0.0
+
     # Cálculos
     dias_ativos = (datetime.date.today() - pool["data_entrada"]).days
     if dias_ativos <= 0:
       dias_ativos = 1
 
-    pnl = (pool["valor_atual"] + pool["fees_acumuladas"]) - pool[
-        "valor_inicial"
-    ]
+    total_fees_geradas = (
+        pool["fees_sacadas"]
+        + pool["fees_reinvestidas"]
+        + pool["fees_nao_coletadas"]
+    )
+
+    pnl = (pool["valor_atual"] + pool["fees_sacadas"]) - pool["valor_inicial"]
     variacao_pct = (
         (
             (pool["valor_atual"] - pool["valor_inicial"])
@@ -168,8 +182,9 @@ else:
         if pool["valor_inicial"] > 0
         else 0
     )
+
     apr = (
-        (pool["fees_acumuladas"] / pool["valor_inicial"])
+        (total_fees_geradas / pool["valor_inicial"])
         * (365 / dias_ativos)
         * 100
         if pool["valor_inicial"] > 0
@@ -178,7 +193,6 @@ else:
 
     # Cartão Container
     with st.container():
-      # Cabeçalho do Cartão
       c_head1, c_head2 = st.columns([2, 3])
 
       with c_head1:
@@ -211,10 +225,12 @@ else:
       b1, b2, b3, b4 = st.columns(4)
       b1.info(f"**Valor Inicial:** ${pool['valor_inicial']:,.2f}")
       b2.info(f"**Dias Ativos:** {dias_ativos} dias")
-      b3.info(f"**Total Fees Sacadas:** ${pool['fees_acumuladas']:,.2f}")
+      b3.info(
+          f"**Fees (Sacadas / Reinvestidas):** ${pool['fees_sacadas']:,.2f} /"
+          f" ${pool['fees_reinvestidas']:,.2f}"
+      )
       b4.info(
-          f"**Range de Preço:** ${pool['range_min']:,.0f} -"
-          f" ${pool['range_max']:,.0f}"
+          f"**Range de Preço:** {pool['range_min']:,.2f} - {pool['range_max']:,.2f}"
       )
 
       # Botões de Ação
@@ -225,20 +241,19 @@ else:
 
       if btn2.button(f"🔄 Reinvestir Fees", key=f"reinvest_{pool['id']}"):
         if pool["fees_nao_coletadas"] > 0:
-          pool["valor_atual"] += pool["fees_nao_coletadas"]
           fees_temp = pool["fees_nao_coletadas"]
+          pool["valor_atual"] += fees_temp
+          pool["fees_reinvestidas"] += fees_temp
           pool["fees_nao_coletadas"] = 0.0
-          st.success(
-              f"${fees_temp:,.2f} em fees reinvestidos na piscina com sucesso!"
-          )
+          st.success(f"${fees_temp:,.2f} reinvestidos com sucesso!")
           st.rerun()
         else:
           st.warning("Não há fees pendentes para reinvestir.")
 
       if btn3.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
         if pool["fees_nao_coletadas"] > 0:
-          pool["fees_acumuladas"] += pool["fees_nao_coletadas"]
           fees_temp = pool["fees_nao_coletadas"]
+          pool["fees_sacadas"] += fees_temp
           pool["fees_nao_coletadas"] = 0.0
           st.success(f"${fees_temp:,.2f} sacados para a carteira!")
           st.rerun()
@@ -260,7 +275,6 @@ else:
       # Gráfico de Histórico
       st.subheader("📈 Histórico de Liquidez")
 
-      # Gerar dados simulados de histórico
       dates = pd.date_range(end=datetime.datetime.now(), periods=15, freq="D")
       val_base = pool["valor_inicial"]
       np.random.seed(pool["id"])
