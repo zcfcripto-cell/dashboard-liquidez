@@ -173,7 +173,7 @@ with st.sidebar:
     st.session_state["input_data_in"] = datetime.date.today()
 
   with st.form("nova_pool_form", clear_on_submit=True):
-    par = st.text_input("Par (ex: COIN/USDC)", key="form_par")
+    par = st.text_input("Par (ex: SOL/USDC)", key="form_par")
     rede = st.text_input("Rede / Plataforma (ex: SOLANA)", key="form_rede")
     dex = st.selectbox("DEX", DEX_OPTIONS, key="form_dex")
     v_init = st.number_input("Valor Inicial ($)", min_value=0.0, key="form_v_init")
