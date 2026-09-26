@@ -6,7 +6,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Gestor de Piscinas de Liquidez", layout="wide")
 
-# Estilo personalizado para os cartões e barra azul personalizada
+# CSS para forçar a BARRA AZUL GROSSA
 st.markdown(
     """
     <style>
@@ -26,19 +26,31 @@ st.markdown(
         font-size: 12px;
         font-weight: bold;
     }
-    
-    /* Personalização da Barra de Rolamento (Slider) para ser Azul e Grossa */
-    div[data-baseweb="slider"] div {
-        height: 12px !important;
+
+    /* ESTILO DA BARRA DE ROLAMENTO: AZUL E GROSSA */
+    div[data-baseweb="slider"] {
+        padding-top: 15px !important;
+        padding-bottom: 15px !important;
     }
-    div[data-baseweb="slider"] div[role="slider"] {
-        height: 24px !important;
-        width: 24px !important;
-        background-color: #3b82f6 !important;
-        border: 2px solid #ffffff !important;
+    div[data-baseweb="slider"] > div {
+        height: 16px !important; /* Altura/Espessura da Barra */
+        background-color: #1e3a8a !important; /* Azul escuro de fundo */
+        border-radius: 8px !important;
     }
+    /* Intervalo selecionado (Barra interna) */
     div[data-baseweb="slider"] > div > div {
-        background: #2563eb !important;
+        background-color: #2563eb !important; /* Azul vivo */
+        height: 16px !important;
+        border-radius: 8px !important;
+    }
+    /* Manípulos das pontas */
+    div[data-baseweb="slider"] div[role="slider"] {
+        height: 28px !important;
+        width: 28px !important;
+        background-color: #3b82f6 !important;
+        border: 3px solid #ffffff !important;
+        box-shadow: 0px 0px 8px rgba(37, 99, 235, 0.8) !important;
+        top: -6px !important;
     }
     </style>
 """,
@@ -79,7 +91,7 @@ DEX_OPTIONS = [
 ]
 
 
-# Pop-up modal com formulário para garantir o envio dos dados
+# Modal para atualizar pool
 @st.dialog("Atualizar Pool")
 def modal_atualizar_pool(pool_id):
   index = next(
@@ -312,10 +324,19 @@ else:
         ]
         st.rerun()
 
-      # Gráfico de Histórico Dinâmico
+      # -------------------------------------------------------------
+      # 1. GRÁFICO DE HISTÓRICO
+      # -------------------------------------------------------------
       st.subheader("📈 Histórico de Liquidez")
 
-      # Gerar conjunto completo de dados
+      # Chave para guardar o intervalo do slider no session_state
+      slider_key = f"slider_range_{pool['id']}"
+      if slider_key not in st.session_state:
+        st.session_state[slider_key] = (dt_entrada, dt_hoje)
+
+      dt_inicio_sel, dt_fim_sel = st.session_state[slider_key]
+
+      # Dados do histórico
       full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
       num_pontos = len(full_dates)
 
@@ -335,41 +356,10 @@ else:
           {"Data": full_dates.date, "Liquidez ($)": simulated_values}
       )
 
-      # BARRA DE ROLAMENTO (SLIDER) DE INTERVALO DE DATAS (Azul e Grossa)
-      st.markdown("**🔵 Ajuste o intervalo de datas para recalcular o APR:**")
-      selected_range = st.slider(
-          "Seleção de Intervalo",
-          min_value=dt_entrada,
-          max_value=dt_hoje,
-          value=(dt_entrada, dt_hoje),
-          format="YYYY-MM-DD",
-          key=f"slider_{pool['id']}",
-          label_visibility="collapsed",
-      )
-
-      dt_inicio_sel, dt_fim_sel = selected_range
-      dias_selecionados = (dt_fim_sel - dt_inicio_sel).days
-      if dias_selecionados <= 0:
-        dias_selecionados = 1
-
-      # Recalcular APR no intervalo selecionado
-      apr_periodo = (
-          (total_fees_geradas / pool["valor_inicial"])
-          * (365 / dias_selecionados)
-          * 100
-          if pool["valor_inicial"] > 0
-          else 0
-      )
-
-      # Filtrar dados para o gráfico
+      # Filtrar dados para o gráfico com base nas datas selecionadas
       df_chart = df_full[
           (df_full["Data"] >= dt_inicio_sel) & (df_full["Data"] <= dt_fim_sel)
       ]
-
-      # Exibir caixa com o APR do período selecionado
-      col_info1, col_info2 = st.columns(2)
-      col_info1.metric("Dias Selecionados", f"{dias_selecionados} dias")
-      col_info2.metric("APR Est. (No Intervalo)", f"{apr_periodo:.2f}%")
 
       fig = px.line(
           df_chart,
@@ -382,10 +372,44 @@ else:
       fig.update_layout(
           template="plotly_dark",
           height=250,
-          margin=dict(l=20, r=20, t=20, b=20),
+          margin=dict(l=20, r=20, t=10, b=10),
           xaxis_title="",
           yaxis_title="",
       )
       st.plotly_chart(fig, use_container_width=True)
+
+      # -------------------------------------------------------------
+      # 2. BARRA DE ROLAMENTO (ABAIXO DO GRÁFICO - AZUL E GROSSA)
+      # -------------------------------------------------------------
+      st.write("🟦 **Ajuste o Intervalo de Datas para calcular o APR:**")
+      selected_range = st.slider(
+          "Seleção de Intervalo",
+          min_value=dt_entrada,
+          max_value=dt_hoje,
+          value=st.session_state[slider_key],
+          format="YYYY-MM-DD",
+          key=slider_key,
+          label_visibility="collapsed",
+      )
+
+      # -------------------------------------------------------------
+      # 3. RESULTADOS DO APR EM FUNÇÃO DO INTERVALO SELECIONADO
+      # -------------------------------------------------------------
+      dt_inicio_sel, dt_fim_sel = selected_range
+      dias_selecionados = (dt_fim_sel - dt_inicio_sel).days
+      if dias_selecionados <= 0:
+        dias_selecionados = 1
+
+      apr_periodo = (
+          (total_fees_geradas / pool["valor_inicial"])
+          * (365 / dias_selecionados)
+          * 100
+          if pool["valor_inicial"] > 0
+          else 0
+      )
+
+      c_res1, c_res2 = st.columns(2)
+      c_res1.info(f"📅 **Dias Selecionados:** {dias_selecionados} dias")
+      c_res2.success(f"⚡ **APR no Intervalo:** {apr_periodo:.2f}%")
 
       st.markdown("---")
