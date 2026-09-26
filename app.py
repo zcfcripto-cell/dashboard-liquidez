@@ -44,11 +44,11 @@ if "pools_data" not in st.session_state:
           "valor_inicial": 2203.0,
           "valor_atual": 2583.0,
           "fees_sacadas": 50.0,
-          "fees_reinvestidas":50.0,
+          "fees_reinvestidas": 0.0,
           "fees_nao_coletadas": 6.89,
           "range_min": 19469.55,
           "range_max": 30933.15,
-          "data_entrada": datetime.date(2026, 8, 20),
+          "data_entrada": datetime.date(2026, 9, 24),
       }
   ]
 
@@ -65,7 +65,7 @@ DEX_OPTIONS = [
 ]
 
 
-# Pop-up modal dinâmico
+# Pop-up modal dinâmico com campo para atualizar a Data de Entrada
 @st.dialog("Atualizar Pool")
 def modal_atualizar_pool(pool_id):
   pool = next(
@@ -86,11 +86,16 @@ def modal_atualizar_pool(pool_id):
         value=float(pool["fees_nao_coletadas"]),
         step=0.1,
     )
+    nova_data_entrada = st.date_input(
+        "Data de Entrada",
+        value=pool.get("data_entrada", datetime.date.today()),
+    )
 
     col_cancel, col_save = st.columns(2)
     if col_save.button("Salvar", type="primary", use_container_width=True):
       pool["valor_atual"] = novo_valor_atual
       pool["fees_nao_coletadas"] = novas_fees_pendentes
+      pool["data_entrada"] = nova_data_entrada
       st.success(f"Pool {pool['par']} atualizada com sucesso!")
       st.rerun()
 
