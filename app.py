@@ -48,7 +48,7 @@ if "pools_data" not in st.session_state:
           "fees_nao_coletadas": 6.89,
           "range_min": 19469.55,
           "range_max": 30933.15,
-          "data_entrada": datetime.date(2026, 9, 24),
+          "data_entrada": datetime.date(2026, 8, 20),
       }
   ]
 
@@ -65,7 +65,7 @@ DEX_OPTIONS = [
 ]
 
 
-# Pop-up modal com formulário explícito para garantir o envio dos dados
+# Pop-up modal com formulário para garantir o envio dos dados
 @st.dialog("Atualizar Pool")
 def modal_atualizar_pool(pool_id):
   index = next(
@@ -108,7 +108,6 @@ def modal_atualizar_pool(pool_id):
       )
 
       if submitted:
-        # Atualização direta na session_state
         st.session_state.pools_data[index]["valor_atual"] = novo_valor_atual
         st.session_state.pools_data[index]["fees_nao_coletadas"] = (
             novas_fees_pendentes
@@ -140,7 +139,7 @@ with st.sidebar:
     col_r1, col_r2 = st.columns(2)
     r_min = col_r1.number_input("Range Mín ($)", value=19469.55)
     r_max = col_r2.number_input("Range Máx ($)", value=30933.15)
-    data_in = st.date_input("Data de Entrada", datetime.date(2026, 9, 24))
+    data_in = st.date_input("Data de Entrada", datetime.date(2026, 8, 20))
 
     submit = st.form_submit_button("Criar Pool")
     if submit:
@@ -186,9 +185,9 @@ else:
     if isinstance(dt_entrada, str):
       dt_entrada = datetime.datetime.strptime(dt_entrada, "%Y-%m-%d").date()
 
-    dias_ativos = (datetime.date.today() - dt_entrada).days
-    if dias_ativos <= 0:
-      dias_ativos = 1
+    hoje = datetime.date.today()
+    if dt_entrada >= hoje:
+      dt_entrada = hoje - datetime.timedelta(days=1)
 
     total_fees_geradas = (
         pool["fees_sacadas"]
@@ -202,14 +201,6 @@ else:
             (pool["valor_atual"] - pool["valor_inicial"])
             / pool["valor_inicial"]
         )
-        * 100
-        if pool["valor_inicial"] > 0
-        else 0
-    )
-
-    apr = (
-        (total_fees_geradas / pool["valor_inicial"])
-        * (365 / dias_ativos)
         * 100
         if pool["valor_inicial"] > 0
         else 0
@@ -229,6 +220,32 @@ else:
         )
         st.caption(f"Plataforma: {pool['rede']}")
 
+      # Área de Seleção de Intervalo de Datas por Barra de Rolamento (Slider)
+      st.markdown("#### 📅 Filtrar Intervalo de Datas para Cálculo do APR")
+
+      intervalo_datas = st.slider(
+          "Arraste as extremidades para definir o intervalo de datas:",
+          min_value=dt_entrada,
+          max_value=hoje,
+          value=(dt_entrada, hoje),
+          format="YYYY-MM-DD",
+          key=f"slider_dates_{pool['id']}",
+      )
+
+      data_inicio_sel, data_fim_sel = intervalo_datas
+      dias_selecionados = (data_fim_sel - data_inicio_sel).days
+      if dias_selecionados <= 0:
+        dias_selecionados = 1
+
+      # Cálculo do APR dinâmico com base nos dias selecionados
+      apr_dinamico = (
+          (total_fees_geradas / pool["valor_inicial"])
+          * (365 / dias_selecionados)
+          * 100
+          if pool["valor_inicial"] > 0
+          else 0
+      )
+
       with c_head2:
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Valor Atual", f"${pool['valor_atual']:,.2f}")
@@ -242,13 +259,17 @@ else:
             f"${pnl:+.2f}",
             delta_color="normal" if pnl >= 0 else "inverse",
         )
-        m4.metric("APR Est.", f"{apr:.2f}%")
+        m4.metric("APR (Intervalo)", f"{apr_dinamico:.2f}%")
         m5.metric("Fees Pendentes", f"${pool['fees_nao_coletadas']:,.2f}")
 
       # Blocos de métricas secundárias
       b1, b2, b3, b4 = st.columns(4)
       b1.info(f"**Valor Inicial:** ${pool['valor_inicial']:,.2f}")
-      b2.info(f"**Dias Ativos:** {dias_ativos} dias")
+      b2.info(
+          f"**Período Selecionado:** {dias_selecionados} dias"
+          f" ({data_inicio_sel.strftime('%d/%m/%Y')} a"
+          f" {data_fim_sel.strftime('%d/%m/%Y')})"
+      )
       b3.info(
           f"**Fees (Sacadas / Reinvestidas):** ${pool['fees_sacadas']:,.2f} /"
           f" ${pool['fees_reinvestidas']:,.2f}"
@@ -296,20 +317,37 @@ else:
         ]
         st.rerun()
 
-      # Gráfico de Histórico
-      st.subheader("📈 Histórico de Liquidez")
+      # Gráfico de Histórico Dinâmico (Sincronizado com o Slider de Datas)
+      st.subheader("📈 Histórico de Liquidez (Período Selecionado)")
 
-      dates = pd.date_range(end=datetime.datetime.now(), periods=15, freq="D")
-      val_base = pool["valor_inicial"]
-      np.random.seed(pool["id"])
-      simulated_values = val_base + np.cumsum(
-          np.random.normal(1.5, 3, size=15)
+      # Gerar as datas exatas dentro do intervalo selecionado no slider
+      dates_full = pd.date_range(start=dt_entrada, end=hoje, freq="D")
+      num_pontos_total = len(dates_full)
+
+      if num_pontos_total == 1:
+        simulated_values = [pool["valor_atual"]]
+      else:
+        np.random.seed(pool["id"])
+        ruido = np.cumsum(np.random.normal(0, 2, size=num_pontos_total))
+        ruido = ruido - ruido[0]
+        tendencia = np.linspace(
+            pool["valor_inicial"], pool["valor_atual"], num_pontos_total
+        )
+        simulated_values = tendencia + ruido
+        simulated_values[-1] = pool["valor_atual"]
+
+      df_chart_full = pd.DataFrame(
+          {"Data": dates_full.date, "Liquidez ($)": simulated_values}
       )
 
-      df_chart = pd.DataFrame({"Data": dates, "Liquidez ($)": simulated_values})
+      # Filtrar o DataFrame de acordo com o slider
+      df_chart_filtered = df_chart_full[
+          (df_chart_full["Data"] >= data_inicio_sel)
+          & (df_chart_full["Data"] <= data_fim_sel)
+      ]
 
       fig = px.line(
-          df_chart,
+          df_chart_filtered,
           x="Data",
           y="Liquidez ($)",
           line_shape="spline",
