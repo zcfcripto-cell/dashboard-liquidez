@@ -61,7 +61,7 @@ st.markdown(
 
 st.title("📊 Gestor de Piscinas de Liquidez")
 
-# Inicializar bases de dados na sessão
+# Inicializar bases de dados na sessão (Começa na Pool #1)
 if "pools_data" not in st.session_state:
   st.session_state.pools_data = [
       {
@@ -110,7 +110,7 @@ def modal_atualizar_pool(pool_id):
 
   if index is not None:
     pool = st.session_state.pools_data[index]
-    st.subheader(f"Atualizar Pool - {pool['par']}")
+    st.subheader(f"Atualizar Pool #{pool['id']} - {pool['par']}")
 
     data_ori = pool.get("data_entrada", datetime.date.today())
     if isinstance(data_ori, str):
@@ -144,7 +144,7 @@ def modal_atualizar_pool(pool_id):
         )
         st.session_state.pools_data[index]["data_entrada"] = nova_data_entrada
 
-        st.success(f"Pool {pool['par']} atualizada com sucesso!")
+        st.success(f"Pool #{pool['id']} ({pool['par']}) atualizada com sucesso!")
         st.rerun()
 
 
@@ -178,9 +178,10 @@ with st.sidebar:
 
     submit = st.form_submit_button("Criar Pool")
     if submit:
-      novo_id = (
-          max([p["id"] for p in st.session_state.pools_data], default=0) + 1
-      )
+      # O próximo ID começa em 1 caso a lista esteja vazia
+      max_id = max([p["id"] for p in st.session_state.pools_data], default=0)
+      novo_id = max_id + 1 if max_id >= 1 else 1
+
       st.session_state.pools_data.append({
           "id": novo_id,
           "par": par if par else "POOL/USD",
@@ -196,7 +197,7 @@ with st.sidebar:
           "data_entrada": data_in,
       })
 
-      st.success("Pool adicionada com sucesso!")
+      st.success(f"Pool #{novo_id} adicionada com sucesso!")
       st.rerun()
 
   st.markdown("---")
@@ -276,13 +277,13 @@ else:
   # SE A OPÇÃO DE ESCONDER DETALHES ESTIVER ATIVA: MOSTRA UMA TABELA DE RESUMO
   if st.session_state.ocultar_detalhes:
     resumo_list = []
-    for p in st.session_state.pools_data:
+    for idx, p in enumerate(st.session_state.pools_data, start=1):
       f_sac = p.get("fees_sacadas", 0.0)
       f_reinv = p.get("fees_reinvestidas", 0.0)
       f_pend = p.get("fees_nao_coletadas", 0.0)
-      tot_fees = f_sac + f_reinv + f_pend
 
       resumo_list.append({
+          "#": idx,
           "Par": p["par"],
           "Plataforma": p["rede"],
           "Estado": p["estado"],
@@ -294,15 +295,18 @@ else:
           "Range Máx": f"{p['range_max']:,.2f}",
       })
     df_resumo = pd.DataFrame(resumo_list)
-    st.dataframe(df_resumo, use_container_width=True)
+    st.dataframe(df_resumo, use_container_width=True, hide_index=True)
 
   else:
     # MODO DETALHADO (COMPLETO)
-    for pool in st.session_state.pools_data:
+    for idx, pool in enumerate(st.session_state.pools_data, start=1):
       if "fees_sacadas" not in pool:
         pool["fees_sacadas"] = pool.get("fees_acumuladas", 0.0)
       if "fees_reinvestidas" not in pool:
         pool["fees_reinvestidas"] = 0.0
+
+      # Garantir que o ID interno é válido e refletido a partir de 1
+      pool["id"] = pool.get("id", idx)
 
       # Tratamento da Data de Entrada
       dt_entrada = pool.get("data_entrada", datetime.date.today())
@@ -351,7 +355,7 @@ else:
               "badge-ativa" if pool["estado"] == "Ativa" else "badge-fechada"
           )
           st.markdown(
-              f"### 🪙 **{pool['par']}** <span"
+              f"### 🪙 **Pool #{idx}: {pool['par']}** <span"
               f" class='{badge_class}'>{pool['estado']}</span>",
               unsafe_allow_html=True,
           )
