@@ -19,6 +19,7 @@ DEX_OPTIONS = [
     "Outro (Introduzir manualmente)",
 ]
 
+# Inicializar o estado dos dados
 if "pools" not in st.session_state:
   st.session_state.pools = pd.DataFrame(
       columns=[
@@ -32,6 +33,7 @@ if "pools" not in st.session_state:
       ]
   )
 
+# Formulário no Painel Lateral
 with st.sidebar.form("nova_pool"):
   st.header("Adicionar / Atualizar Pool")
 
@@ -65,6 +67,23 @@ with st.sidebar.form("nova_pool"):
         [st.session_state.pools, pd.DataFrame([nova_linha])], ignore_index=True
     )
 
+# Botão para limpar registos (fora do formulário)
+st.sidebar.markdown("---")
+if st.sidebar.button("🗑️ Limpar Todos os Registos"):
+  st.session_state.pools = pd.DataFrame(
+      columns=[
+          "Protocolo",
+          "Par",
+          "Valor Entrada ($)",
+          "Valor Saída/Atual ($)",
+          "Fees Geradas ($)",
+          "Lucro/Prejuízo ($)",
+          "ROI (%)",
+      ]
+  )
+  st.rerun()
+
+# Exibição dos resultados no painel principal
 if not st.session_state.pools.empty:
   df = st.session_state.pools
   col1, col2, col3 = st.columns(3)
