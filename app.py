@@ -4,9 +4,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(
-    page_title="Gestor de Piscinas de Liquidez", layout="wide"
-)
+st.set_page_config(page_title="Gestor de Piscinas de Liquidez", layout="wide")
 
 # Estilo personalizado para os cartões
 st.markdown(
@@ -37,7 +35,7 @@ st.markdown(
     }
     </style>
 """,
-    unsafe_allow_allow_html=True,
+    unsafe_allow_html=True,
 )
 
 st.title("📊 Gestor de Piscinas de Liquidez")
