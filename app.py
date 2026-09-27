@@ -19,9 +19,9 @@ st.set_page_config(
 
 
 def get_dexscreener_pair_data(pair_address: str):
-  """Obtém o preço em tempo real e a liquidez do par no DexScreener."""
+  """Obtém o preço em tempo real no DexScreener em USD e na moeda nativa (ex: SOL)."""
   if not pair_address:
-    return None, None
+    return None, None, None
   clean_addr = pair_address.strip()
   url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{clean_addr}"
   try:
@@ -31,13 +31,12 @@ def get_dexscreener_pair_data(pair_address: str):
       if data and "pair" in data and data["pair"]:
         pair = data["pair"]
         price_usd = float(pair.get("priceUsd", 0))
-        liquidity_usd = float(
-            pair.get("liquidity", {}).get("usd", 0)
-        )
-        return price_usd, liquidity_usd
+        price_native = float(pair.get("priceNative", 0))
+        liquidity_usd = float(pair.get("liquidity", {}).get("usd", 0))
+        return price_usd, price_native, liquidity_usd
   except Exception:
     pass
-  return None, None
+  return None, None, None
 
 
 # -------------------------------------------------------------
@@ -329,11 +328,16 @@ DEX_OPTIONS = [
 
 # Popup de Sincronização e Atualização
 @st.dialog("Sincronização / Atualização da Pool")
-def modal_sincronizar_carteira(pool_id, preco_sugerido=None):
+def modal_sincronizar_carteira(
+    pool_id, preco_sugerido_usd=None, preco_sugerido_native=None
+):
   pool = next((p for p in pools_data if p["id"] == pool_id), None)
   if pool is not None:
-    if preco_sugerido:
-      st.info(f"💡 Cotação detetada no DexScreener: **${preco_sugerido:,.6f}**")
+    if preco_sugerido_native:
+      st.info(
+          f"💡 Cotação no DexScreener: **{preco_sugerido_native:.6f} SOL**"
+          f" (${preco_sugerido_usd:.6f} USD)"
+      )
 
     val_default = (
         float(pool["valor_atual"])
@@ -361,13 +365,13 @@ def modal_sincronizar_carteira(pool_id, preco_sugerido=None):
 
       col_r1, col_r2 = st.columns(2)
       r_min_modal = col_r1.number_input(
-          "Range Mín ($)",
+          "Range Mín",
           value=float(pool["range_min"]),
           format="%.6f",
           step=0.000001,
       )
       r_max_modal = col_r2.number_input(
-          "Range Máx ($)",
+          "Range Máx",
           value=float(pool["range_max"]),
           format="%.6f",
           step=0.000001,
@@ -426,13 +430,13 @@ def modal_atualizar_pool(pool_id):
 
       col_r1, col_r2 = st.columns(2)
       novo_r_min = col_r1.number_input(
-          "Range Mín ($)",
+          "Range Mín",
           value=float(pool["range_min"]),
           format="%.6f",
           step=0.000001,
       )
       novo_r_max = col_r2.number_input(
-          "Range Máx ($)",
+          "Range Máx",
           value=float(pool["range_max"]),
           format="%.6f",
           step=0.000001,
@@ -484,10 +488,10 @@ with st.sidebar:
     )
     col_r1, col_r2 = st.columns(2)
     r_min = col_r1.number_input(
-        "Range Mín ($)", key="form_r_min", format="%.6f", step=0.000001
+        "Range Mín", key="form_r_min", format="%.6f", step=0.000001
     )
     r_max = col_r2.number_input(
-        "Range Máx ($)", key="form_r_max", format="%.6f", step=0.000001
+        "Range Máx", key="form_r_max", format="%.6f", step=0.000001
     )
     data_in = st.date_input(
         "Data de Entrada", datetime.date.today(), key="form_data_in"
@@ -697,10 +701,14 @@ else:
             modal_sincronizar_carteira(pool["id"])
           else:
             with st.spinner("A consultar DexScreener..."):
-              price_usd, liq_usd = get_dexscreener_pair_data(addr)
+              price_usd, price_native, liq_usd = get_dexscreener_pair_data(addr)
 
               if price_usd and price_usd > 0:
-                modal_sincronizar_carteira(pool["id"], preco_sugerido=price_usd)
+                modal_sincronizar_carteira(
+                    pool["id"],
+                    preco_sugerido_usd=price_usd,
+                    preco_sugerido_native=price_native,
+                )
               else:
                 modal_sincronizar_carteira(pool["id"])
 
