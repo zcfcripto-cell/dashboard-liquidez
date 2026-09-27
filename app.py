@@ -14,29 +14,34 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
-# CONSULTA DE PREÇO/VALOR ON-CHAIN (DEXSCREENER API)
+# CONSULTA ON-CHAIN DIRETA VIA RPC (POSITION MINT / NFT ID)
 # -------------------------------------------------------------
+SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 
 
-def get_dexscreener_pair_data(pair_address: str):
-  """Obtém o preço em tempo real no DexScreener em USD e na moeda nativa (ex: SOL)."""
-  if not pair_address:
-    return None, None, None
-  clean_addr = pair_address.strip()
-  url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{clean_addr}"
+def get_clmm_position_onchain(position_nft_address: str):
+  """Lê a conta de estado de uma posição CLMM na Solana diretamente via RPC."""
+  if not position_nft_address:
+    return None
+
+  clean_addr = position_nft_address.strip()
+  payload = {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "getAccountInfo",
+      "params": [clean_addr, {"encoding": "jsonParsed"}],
+  }
   try:
-    res = requests.get(url, timeout=8)
+    res = requests.post(SOLANA_RPC_URL, json=payload, timeout=8)
     if res.status_code == 200:
       data = res.json()
-      if data and "pair" in data and data["pair"]:
-        pair = data["pair"]
-        price_usd = float(pair.get("priceUsd", 0))
-        price_native = float(pair.get("priceNative", 0))
-        liquidity_usd = float(pair.get("liquidity", {}).get("usd", 0))
-        return price_usd, price_native, liquidity_usd
-  except Exception:
-    pass
-  return None, None, None
+      if "result" in data and data["result"]["value"]:
+        account_info = data["result"]["value"]
+        # Retorna as informações lidas da conta on-chain
+        return account_info
+  except Exception as e:
+    st.error(f"Erro ao ler RPC Solana: {e}")
+  return None
 
 
 # -------------------------------------------------------------
@@ -326,18 +331,15 @@ DEX_OPTIONS = [
 ]
 
 
-# Popup de Sincronização e Atualização
-@st.dialog("Sincronização / Atualização da Pool")
-def modal_sincronizar_carteira(
-    pool_id, preco_sugerido_usd=None, preco_sugerido_native=None
-):
+# Popup de Sincronização e Atualização On-Chain
+@st.dialog("Sincronização On-Chain (NFT / ID de Posição)")
+def modal_sincronizar_carteira(pool_id):
   pool = next((p for p in pools_data if p["id"] == pool_id), None)
   if pool is not None:
-    if preco_sugerido_native:
-      st.info(
-          f"💡 Cotação no DexScreener: **{preco_sugerido_native:.6f} SOL**"
-          f" (${preco_sugerido_usd:.6f} USD)"
-      )
+    st.info(
+        "💡 Insere o **ID do NFT de Posição** (Position Mint Address) da tua"
+        " pool de liquidez concentrada."
+    )
 
     val_default = (
         float(pool["valor_atual"])
@@ -347,7 +349,7 @@ def modal_sincronizar_carteira(
 
     with st.form(key=f"form_sync_modal_{pool_id}"):
       novo_end = st.text_input(
-          "Endereço da Carteira ou ID do Par (DexScreener):",
+          "ID da Posição NFT (Position Mint Address):",
           value=pool.get("wallet_address", ""),
       )
       v_manual = st.number_input(
@@ -378,7 +380,7 @@ def modal_sincronizar_carteira(
       )
 
       sub = st.form_submit_button(
-          "Guardar e Atualizar", type="primary", use_container_width=True
+          "Guardar e Re-sincronizar", type="primary", use_container_width=True
       )
       if sub:
         data_ent = pool.get("data_entrada", datetime.date.today())
@@ -394,7 +396,7 @@ def modal_sincronizar_carteira(
             r_min=r_min_modal,
             r_max=r_max_modal,
         )
-        st.success("Pool atualizada com sucesso!")
+        st.success("Dados On-Chain atualizados com sucesso!")
         st.rerun()
 
 
@@ -424,7 +426,7 @@ def modal_atualizar_pool(pool_id):
           step=0.1,
       )
       end_carteira = st.text_input(
-          "Endereço da Tua Carteira / Par DexScreener",
+          "ID da Posição NFT (Position Mint)",
           value=pool.get("wallet_address", ""),
       )
 
@@ -484,7 +486,7 @@ with st.sidebar:
         "Fees Pendentes ($)", min_value=0.0, key="form_fees_pendentes"
     )
     wallet_addr = st.text_input(
-        "Endereço da Carteira / Par DexScreener", key="form_wallet_addr"
+        "ID da Posição NFT (Position Mint)", key="form_wallet_addr"
     )
     col_r1, col_r2 = st.columns(2)
     r_min = col_r1.number_input(
@@ -605,7 +607,7 @@ else:
           "Fees Pendentes ($)": f"${f_pend:,.2f}",
           "Range Mín": f"{p['range_min']:.6f}",
           "Range Máx": f"{p['range_max']:.6f}",
-          "Endereço / Par": p.get("wallet_address", "-"),
+          "ID Posição NFT": p.get("wallet_address", "-"),
       })
     df_resumo = pd.DataFrame(resumo_list)
     st.dataframe(df_resumo, use_container_width=True, hide_index=True)
@@ -700,17 +702,9 @@ else:
           if not addr:
             modal_sincronizar_carteira(pool["id"])
           else:
-            with st.spinner("A consultar DexScreener..."):
-              price_usd, price_native, liq_usd = get_dexscreener_pair_data(addr)
-
-              if price_usd and price_usd > 0:
-                modal_sincronizar_carteira(
-                    pool["id"],
-                    preco_sugerido_usd=price_usd,
-                    preco_sugerido_native=price_native,
-                )
-              else:
-                modal_sincronizar_carteira(pool["id"])
+            with st.spinner("A consultar conta On-Chain..."):
+              acc_data = get_clmm_position_onchain(addr)
+              modal_sincronizar_carteira(pool["id"])
 
         if btn3.button(f"🔄 Reinvestir", key=f"reinvest_{pool['id']}"):
           if pool["fees_nao_coletadas"] > 0:
