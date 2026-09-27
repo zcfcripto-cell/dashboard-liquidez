@@ -90,8 +90,8 @@ def init_db():
             50.0,
             0.0,
             6.89,
-            19.46,
-            30.93,
+            19.469550,
+            30.933150,
             "2026-08-20",
             "",
         ),
@@ -171,24 +171,48 @@ def add_pool_db(
 
 
 def update_pool_db(
-    pool_id, valor_atual, fees_pendentes, data_entrada, wallet_addr=""
+    pool_id,
+    valor_atual,
+    fees_pendentes,
+    data_entrada,
+    wallet_addr="",
+    r_min=None,
+    r_max=None,
 ):
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
-  c.execute(
-      """
-        UPDATE pools 
-        SET valor_atual = ?, fees_nao_coletadas = ?, data_entrada = ?, wallet_address = ?
-        WHERE id = ?
-    """,
-      (
-          valor_atual,
-          fees_pendentes,
-          data_entrada.strftime("%Y-%m-%d"),
-          wallet_addr,
-          pool_id,
-      ),
-  )
+  if r_min is not None and r_max is not None:
+    c.execute(
+        """
+            UPDATE pools 
+            SET valor_atual = ?, fees_nao_coletadas = ?, data_entrada = ?, wallet_address = ?, range_min = ?, range_max = ?
+            WHERE id = ?
+        """,
+        (
+            valor_atual,
+            fees_pendentes,
+            data_entrada.strftime("%Y-%m-%d"),
+            wallet_addr,
+            r_min,
+            r_max,
+            pool_id,
+        ),
+    )
+  else:
+    c.execute(
+        """
+            UPDATE pools 
+            SET valor_atual = ?, fees_nao_coletadas = ?, data_entrada = ?, wallet_address = ?
+            WHERE id = ?
+        """,
+        (
+            valor_atual,
+            fees_pendentes,
+            data_entrada.strftime("%Y-%m-%d"),
+            wallet_addr,
+            pool_id,
+        ),
+    )
   conn.commit()
   conn.close()
 
@@ -311,7 +335,6 @@ def modal_sincronizar_carteira(pool_id, preco_sugerido=None):
     if preco_sugerido:
       st.info(f"💡 Cotação detetada no DexScreener: **${preco_sugerido:,.6f}**")
 
-    # Garante que o valor padrão não abre a 0 se já existia um valor anterior
     val_default = (
         float(pool["valor_atual"])
         if pool["valor_atual"] > 0
@@ -336,6 +359,20 @@ def modal_sincronizar_carteira(pool_id, preco_sugerido=None):
           step=0.1,
       )
 
+      col_r1, col_r2 = st.columns(2)
+      r_min_modal = col_r1.number_input(
+          "Range Mín ($)",
+          value=float(pool["range_min"]),
+          format="%.6f",
+          step=0.000001,
+      )
+      r_max_modal = col_r2.number_input(
+          "Range Máx ($)",
+          value=float(pool["range_max"]),
+          format="%.6f",
+          step=0.000001,
+      )
+
       sub = st.form_submit_button(
           "Guardar e Atualizar", type="primary", use_container_width=True
       )
@@ -344,7 +381,15 @@ def modal_sincronizar_carteira(pool_id, preco_sugerido=None):
         if isinstance(data_ent, str):
           data_ent = datetime.datetime.strptime(data_ent, "%Y-%m-%d").date()
 
-        update_pool_db(pool_id, v_manual, f_manual, data_ent, novo_end)
+        update_pool_db(
+            pool_id,
+            v_manual,
+            f_manual,
+            data_ent,
+            novo_end,
+            r_min=r_min_modal,
+            r_max=r_max_modal,
+        )
         st.success("Pool atualizada com sucesso!")
         st.rerun()
 
@@ -378,6 +423,21 @@ def modal_atualizar_pool(pool_id):
           "Endereço da Tua Carteira / Par DexScreener",
           value=pool.get("wallet_address", ""),
       )
+
+      col_r1, col_r2 = st.columns(2)
+      novo_r_min = col_r1.number_input(
+          "Range Mín ($)",
+          value=float(pool["range_min"]),
+          format="%.6f",
+          step=0.000001,
+      )
+      novo_r_max = col_r2.number_input(
+          "Range Máx ($)",
+          value=float(pool["range_max"]),
+          format="%.6f",
+          step=0.000001,
+      )
+
       nova_data_entrada = st.date_input("Data de Entrada", value=data_ori)
 
       submitted = st.form_submit_button(
@@ -391,6 +451,8 @@ def modal_atualizar_pool(pool_id):
             novas_fees_pendentes,
             nova_data_entrada,
             end_carteira,
+            r_min=novo_r_min,
+            r_max=novo_r_max,
         )
         st.success(f"Pool ({pool['par']}) atualizada com sucesso!")
         st.rerun()
@@ -421,8 +483,12 @@ with st.sidebar:
         "Endereço da Carteira / Par DexScreener", key="form_wallet_addr"
     )
     col_r1, col_r2 = st.columns(2)
-    r_min = col_r1.number_input("Range Mín ($)", key="form_r_min")
-    r_max = col_r2.number_input("Range Máx ($)", key="form_r_max")
+    r_min = col_r1.number_input(
+        "Range Mín ($)", key="form_r_min", format="%.6f", step=0.000001
+    )
+    r_max = col_r2.number_input(
+        "Range Máx ($)", key="form_r_max", format="%.6f", step=0.000001
+    )
     data_in = st.date_input(
         "Data de Entrada", datetime.date.today(), key="form_data_in"
     )
@@ -533,6 +599,8 @@ else:
           "Valor Atual ($)": f"${p['valor_atual']:,.2f}",
           "Fees Geradas ($)": f"${f_sac + f_reinv:,.2f}",
           "Fees Pendentes ($)": f"${f_pend:,.2f}",
+          "Range Mín": f"{p['range_min']:.6f}",
+          "Range Máx": f"{p['range_max']:.6f}",
           "Endereço / Par": p.get("wallet_address", "-"),
       })
     df_resumo = pd.DataFrame(resumo_list)
@@ -613,8 +681,8 @@ else:
             f" ${pool['fees_reinvestidas']:,.2f}"
         )
         b4.info(
-            f"**Range de Preço:** {pool['range_min']:,.2f} -"
-            f" {pool['range_max']:,.2f}"
+            f"**Range de Preço:** {pool['range_min']:.6f} -"
+            f" {pool['range_max']:.6f}"
         )
 
         # BOTOES DE AÇÃO
