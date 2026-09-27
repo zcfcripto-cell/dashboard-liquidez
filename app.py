@@ -1,4 +1,5 @@
 import datetime
+import sqlite3
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -9,6 +10,194 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# -------------------------------------------------------------
+# BASE DE DADOS SQLITE (PERSISTÊNCIA DE DADOS)
+# -------------------------------------------------------------
+DB_FILE = "pools_data.db"
+
+
+def init_db():
+  """Cria a tabela se não existir e insere a pool inicial caso esteja vazia."""
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute("""
+        CREATE TABLE IF NOT EXISTS pools (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            par TEXT,
+            rede TEXT,
+            estado TEXT,
+            valor_inicial REAL,
+            valor_atual REAL,
+            fees_sacadas REAL,
+            fees_reinvestidas REAL,
+            fees_nao_coletadas REAL,
+            range_min REAL,
+            range_max REAL,
+            data_entrada TEXT
+        )
+    """)
+  conn.commit()
+
+  # Se a base de dados estiver vazia, adiciona uma pool de demonstração (Pool #1)
+  c.execute("SELECT COUNT(*) FROM pools")
+  if c.fetchone()[0] == 0:
+    c.execute(
+        """
+            INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees_sacadas, fees_reinvestidas, fees_nao_coletadas, range_min, range_max, data_entrada)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "SOL/PUMP",
+            "Raydium - SOLANA",
+            "Ativa",
+            2203.0,
+            2583.0,
+            50.0,
+            0.0,
+            6.89,
+            19469.55,
+            30933.15,
+            "2026-08-20",
+        ),
+    )
+    conn.commit()
+  conn.close()
+
+
+def load_pools():
+  """Carrega todas as pools da base de dados SQLite."""
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute("SELECT * FROM pools ORDER BY id ASC")
+  rows = c.fetchall()
+  conn.close()
+
+  pools = []
+  for r in rows:
+    # Tratamento da data
+    try:
+      dt_ent = datetime.datetime.strptime(r[11], "%Y-%m-%d").date()
+    except Exception:
+      dt_ent = datetime.date.today()
+
+    pools.append({
+        "id": r[0],
+        "par": r[1],
+        "rede": r[2],
+        "estado": r[3],
+        "valor_inicial": float(r[4]),
+        "valor_atual": float(r[5]),
+        "fees_sacadas": float(r[6]),
+        "fees_reinvestidas": float(r[7]),
+        "fees_nao_coletadas": float(r[8]),
+        "range_min": float(r[9]),
+        "range_max": float(r[10]),
+        "data_entrada": dt_ent,
+    })
+  return pools
+
+
+def add_pool_db(
+    par,
+    rede,
+    valor_inicial,
+    valor_atual,
+    fees_sacadas,
+    fees_reinvestidas,
+    fees_pendentes,
+    r_min,
+    r_max,
+    data_in,
+):
+  """Adiciona uma nova pool à base de dados."""
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute(
+      """
+        INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees_sacadas, fees_reinvestidas, fees_nao_coletadas, range_min, range_max, data_entrada)
+        VALUES (?, ?, 'Ativa', ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+      (
+          par,
+          rede,
+          valor_inicial,
+          valor_atual,
+          fees_sacadas,
+          fees_reinvestidas,
+          fees_pendentes,
+          r_min,
+          r_max,
+          data_in.strftime("%Y-%m-%d"),
+      ),
+  )
+  conn.commit()
+  conn.close()
+
+
+def update_pool_db(pool_id, valor_atual, fees_pendentes, data_entrada):
+  """Atualiza os dados de uma pool na base de dados."""
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute(
+      """
+        UPDATE pools 
+        SET valor_atual = ?, fees_nao_coletadas = ?, data_entrada = ?
+        WHERE id = ?
+    """,
+      (valor_atual, fees_pendentes, data_entrada.strftime("%Y-%m-%d"), pool_id),
+  )
+  conn.commit()
+  conn.close()
+
+
+def update_pool_status_db(pool_id, novo_estado):
+  """Atualiza o estado (Ativa/Fechada) de uma pool."""
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute(
+      "UPDATE pools SET estado = ? WHERE id = ?", (novo_estado, pool_id)
+  )
+  conn.commit()
+  conn.close()
+
+
+def update_pool_fees_db(pool_id, novo_v_atual, f_sac, f_reinv, f_pend):
+  """Atualiza as fees e valor atual após saque ou reinvestimento."""
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute(
+      """
+        UPDATE pools 
+        SET valor_atual = ?, fees_sacadas = ?, fees_reinvestidas = ?, fees_nao_coletadas = ?
+        WHERE id = ?
+    """,
+      (novo_v_atual, f_sac, f_reinv, f_pend, pool_id),
+  )
+  conn.commit()
+  conn.close()
+
+
+def delete_pool_db(pool_id):
+  """Elimina uma pool da base de dados."""
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute("DELETE FROM pools WHERE id = ?", (pool_id,))
+  conn.commit()
+  conn.close()
+
+
+def clear_all_pools_db():
+  """Elimina todas as pools da base de dados."""
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute("DELETE FROM pools")
+  conn.commit()
+  conn.close()
+
+
+# Inicializar Base de Dados
+init_db()
 
 # Estilo personalizado para os cartões e barra azul grossa
 st.markdown(
@@ -61,24 +250,8 @@ st.markdown(
 
 st.title("📊 Gestor de Piscinas de Liquidez")
 
-# Inicializar bases de dados na sessão (Começa na Pool #1)
-if "pools_data" not in st.session_state:
-  st.session_state.pools_data = [
-      {
-          "id": 1,
-          "par": "SOL/PUMP",
-          "rede": "Raydium - SOLANA",
-          "estado": "Ativa",
-          "valor_inicial": 2203.0,
-          "valor_atual": 2583.0,
-          "fees_sacadas": 50.0,
-          "fees_reinvestidas": 0.0,
-          "fees_nao_coletadas": 6.89,
-          "range_min": 19469.55,
-          "range_max": 30933.15,
-          "data_entrada": datetime.date(2026, 8, 20),
-      }
-  ]
+# Carregar dados atualizados da base de dados
+pools_data = load_pools()
 
 if "ocultar_detalhes" not in st.session_state:
   st.session_state.ocultar_detalhes = False
@@ -99,18 +272,10 @@ DEX_OPTIONS = [
 # Modal para atualizar pool
 @st.dialog("Atualizar Pool")
 def modal_atualizar_pool(pool_id):
-  index = next(
-      (
-          i
-          for i, p in enumerate(st.session_state.pools_data)
-          if p["id"] == pool_id
-      ),
-      None,
-  )
+  pool = next((p for p in pools_data if p["id"] == pool_id), None)
 
-  if index is not None:
-    pool = st.session_state.pools_data[index]
-    st.subheader(f"Atualizar Pool #{pool['id']} - {pool['par']}")
+  if pool is not None:
+    st.subheader(f"Atualizar Pool - {pool['par']}")
 
     data_ori = pool.get("data_entrada", datetime.date.today())
     if isinstance(data_ori, str):
@@ -138,13 +303,10 @@ def modal_atualizar_pool(pool_id):
       )
 
       if submitted:
-        st.session_state.pools_data[index]["valor_atual"] = novo_valor_atual
-        st.session_state.pools_data[index]["fees_nao_coletadas"] = (
-            novas_fees_pendentes
+        update_pool_db(
+            pool_id, novo_valor_atual, novas_fees_pendentes, nova_data_entrada
         )
-        st.session_state.pools_data[index]["data_entrada"] = nova_data_entrada
-
-        st.success(f"Pool #{pool['id']} ({pool['par']}) atualizada com sucesso!")
+        st.success(f"Pool ({pool['par']}) atualizada com sucesso!")
         st.rerun()
 
 
@@ -178,48 +340,43 @@ with st.sidebar:
 
     submit = st.form_submit_button("Criar Pool")
     if submit:
-      # O próximo ID começa em 1 caso a lista esteja vazia
-      max_id = max([p["id"] for p in st.session_state.pools_data], default=0)
-      novo_id = max_id + 1 if max_id >= 1 else 1
+      nome_par = par if par else "POOL/USD"
+      nome_rede = f"{dex} - {rede if rede else 'Rede'}"
 
-      st.session_state.pools_data.append({
-          "id": novo_id,
-          "par": par if par else "POOL/USD",
-          "rede": f"{dex} - {rede if rede else 'Rede'}",
-          "estado": "Ativa",
-          "valor_inicial": float(v_init),
-          "valor_atual": float(v_atual),
-          "fees_sacadas": float(f_sacadas),
-          "fees_reinvestidas": float(f_reinvestidas),
-          "fees_nao_coletadas": float(fees_pendentes),
-          "range_min": float(r_min),
-          "range_max": float(r_max),
-          "data_entrada": data_in,
-      })
+      add_pool_db(
+          nome_par,
+          nome_rede,
+          float(v_init),
+          float(v_atual),
+          float(f_sacadas),
+          float(f_reinvestidas),
+          float(fees_pendentes),
+          float(r_min),
+          float(r_max),
+          data_in,
+      )
 
-      st.success(f"Pool #{novo_id} adicionada com sucesso!")
+      st.success("Pool adicionada e guardada com sucesso!")
       st.rerun()
 
   st.markdown("---")
   if st.button("🗑️ Limpar Todas as Pools"):
-    st.session_state.pools_data = []
+    clear_all_pools_db()
     st.rerun()
 
 # -------------------------------------------------------------
 # CÁLCULOS DO AGREGADO GERAL (TOPO)
 # -------------------------------------------------------------
-total_liquidez = sum(p["valor_atual"] for p in st.session_state.pools_data)
+total_liquidez = sum(p["valor_atual"] for p in pools_data)
 total_fees_geradas = sum(
-    p.get("fees_sacadas", 0.0) + p.get("fees_reinvestidas", 0.0)
-    for p in st.session_state.pools_data
+    p["fees_sacadas"] + p["fees_reinvestidas"] for p in pools_data
 )
 
-# Cálculo do APR médio das fees
 aprs_com_peso = []
 pesos_iniciais = []
 
 dt_hoje = datetime.date.today()
-for p in st.session_state.pools_data:
+for p in pools_data:
   dt_ent = p.get("data_entrada", dt_hoje)
   if isinstance(dt_ent, str):
     dt_ent = datetime.datetime.strptime(dt_ent, "%Y-%m-%d").date()
@@ -256,7 +413,6 @@ with col_top2:
 with col_top3:
   st.metric("Média do APR das Fees", f"{media_apr_fees:.2f}%")
 with col_top4:
-  # Botão de Esconder / Mostrar Detalhes
   label_btn = (
       "👁️ Mostrar Detalhes das Pools"
       if st.session_state.ocultar_detalhes
@@ -269,15 +425,15 @@ with col_top4:
 st.markdown("---")
 
 # Exibir Pools
-if not st.session_state.pools_data:
+if not pools_data:
   st.info(
       "Nenhuma piscina registada. Utiliza o painel lateral para adicionar."
   )
 else:
-  # SE A OPÇÃO DE ESCONDER DETALHES ESTIVER ATIVA: MOSTRA UMA TABELA DE RESUMO
+  # SE A OPÇÃO DE ESCONDER DETALHES ESTIVER ATIVA: MOSTRA A TABELA DE RESUMO
   if st.session_state.ocultar_detalhes:
     resumo_list = []
-    for idx, p in enumerate(st.session_state.pools_data, start=1):
+    for idx, p in enumerate(pools_data, start=1):
       f_sac = p.get("fees_sacadas", 0.0)
       f_reinv = p.get("fees_reinvestidas", 0.0)
       f_pend = p.get("fees_nao_coletadas", 0.0)
@@ -299,16 +455,7 @@ else:
 
   else:
     # MODO DETALHADO (COMPLETO)
-    for idx, pool in enumerate(st.session_state.pools_data, start=1):
-      if "fees_sacadas" not in pool:
-        pool["fees_sacadas"] = pool.get("fees_acumuladas", 0.0)
-      if "fees_reinvestidas" not in pool:
-        pool["fees_reinvestidas"] = 0.0
-
-      # Garantir que o ID interno é válido e refletido a partir de 1
-      pool["id"] = pool.get("id", idx)
-
-      # Tratamento da Data de Entrada
+    for idx, pool in enumerate(pools_data, start=1):
       dt_entrada = pool.get("data_entrada", datetime.date.today())
       if isinstance(dt_entrada, str):
         dt_entrada = datetime.datetime.strptime(dt_entrada, "%Y-%m-%d").date()
@@ -399,9 +546,15 @@ else:
         if btn2.button(f"🔄 Reinvestir Fees", key=f"reinvest_{pool['id']}"):
           if pool["fees_nao_coletadas"] > 0:
             fees_temp = pool["fees_nao_coletadas"]
-            pool["valor_atual"] += fees_temp
-            pool["fees_reinvestidas"] += fees_temp
-            pool["fees_nao_coletadas"] = 0.0
+            novo_v_atual = pool["valor_atual"] + fees_temp
+            novas_reinv = pool["fees_reinvestidas"] + fees_temp
+            update_pool_fees_db(
+                pool["id"],
+                novo_v_atual,
+                pool["fees_sacadas"],
+                novas_reinv,
+                0.0,
+            )
             st.success(f"${fees_temp:,.2f} reinvestidos com sucesso!")
             st.rerun()
           else:
@@ -410,8 +563,14 @@ else:
         if btn3.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
           if pool["fees_nao_coletadas"] > 0:
             fees_temp = pool["fees_nao_coletadas"]
-            pool["fees_sacadas"] += fees_temp
-            pool["fees_nao_coletadas"] = 0.0
+            novas_sacadas = pool["fees_sacadas"] + fees_temp
+            update_pool_fees_db(
+                pool["id"],
+                pool["valor_atual"],
+                novas_sacadas,
+                pool["fees_reinvestidas"],
+                0.0,
+            )
             st.success(f"${fees_temp:,.2f} sacados para a carteira!")
             st.rerun()
           else:
@@ -420,13 +579,12 @@ else:
         if btn4.button(
             f"🔒 Fechar / Ativar", key=f"close_{pool['id']}"
         ):
-          pool["estado"] = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
+          novo_st = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
+          update_pool_status_db(pool["id"], novo_st)
           st.rerun()
 
         if btn5.button(f"🗑️ Excluir", key=f"del_{pool['id']}"):
-          st.session_state.pools_data = [
-              p for p in st.session_state.pools_data if p["id"] != pool["id"]
-          ]
+          delete_pool_db(pool["id"])
           st.rerun()
 
         # -------------------------------------------------------------
