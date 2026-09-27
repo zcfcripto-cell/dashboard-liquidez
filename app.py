@@ -39,7 +39,6 @@ def init_db():
     """)
   conn.commit()
 
-  # Se a base de dados estiver vazia, adiciona uma pool de demonstração (Pool #1)
   c.execute("SELECT COUNT(*) FROM pools")
   if c.fetchone()[0] == 0:
     c.execute(
@@ -75,7 +74,6 @@ def load_pools():
 
   pools = []
   for r in rows:
-    # Tratamento da data
     try:
       dt_ent = datetime.datetime.strptime(r[11], "%Y-%m-%d").date()
     except Exception:
@@ -250,7 +248,6 @@ st.markdown(
 
 st.title("📊 Gestor de Piscinas de Liquidez")
 
-# Carregar dados atualizados da base de dados
 pools_data = load_pools()
 
 if "ocultar_detalhes" not in st.session_state:
@@ -430,7 +427,6 @@ if not pools_data:
       "Nenhuma piscina registada. Utiliza o painel lateral para adicionar."
   )
 else:
-  # SE A OPÇÃO DE ESCONDER DETALHES ESTIVER ATIVA: MOSTRA A TABELA DE RESUMO
   if st.session_state.ocultar_detalhes:
     resumo_list = []
     for idx, p in enumerate(pools_data, start=1):
@@ -588,9 +584,23 @@ else:
           st.rerun()
 
         # -------------------------------------------------------------
-        # 1. GRÁFICO DE HISTÓRICO
+        # 1. BOTÕES DE SELEÇÃO DA MÉTRICA DO GRÁFICO (LIQUIDEZ vs APR)
         # -------------------------------------------------------------
-        st.subheader("📈 Histórico de Liquidez")
+        st.write(" ")
+        col_g_title, col_g_btn = st.columns([2, 3])
+
+        with col_g_title:
+          st.subheader("📈 Histórico Analítico")
+
+        with col_g_btn:
+          # Alternador entre Liquidez e APR das Fees
+          metric_choice = st.radio(
+              "Métrica do Gráfico",
+              options=["Liquidez ($)", "APR das Fees (%)"],
+              horizontal=True,
+              key=f"metric_choice_{pool['id']}",
+              label_visibility="collapsed",
+          )
 
         slider_key = f"slider_range_{pool['id']}"
         if slider_key not in st.session_state:
@@ -601,38 +611,64 @@ else:
         full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
         num_pontos = len(full_dates)
 
+        # Simulação e cálculo de dados históricos
         if num_pontos == 1:
-          simulated_values = [pool["valor_atual"]]
+          simulated_liquidez = [pool["valor_atual"]]
+          simulated_apr = [apr_total]
         else:
           np.random.seed(pool["id"])
-          ruido = np.cumsum(np.random.normal(0, 2, size=num_pontos))
-          ruido = ruido - ruido[0]
-          tendencia = np.linspace(
+
+          # Simulação de Liquidez
+          ruido_liq = np.cumsum(np.random.normal(0, 2, size=num_pontos))
+          ruido_liq = ruido_liq - ruido_liq[0]
+          tendencia_liq = np.linspace(
               pool["valor_inicial"], pool["valor_atual"], num_pontos
           )
-          simulated_values = tendencia + ruido
-          simulated_values[-1] = pool["valor_atual"]
+          simulated_liquidez = tendencia_liq + ruido_liq
+          simulated_liquidez[-1] = pool["valor_atual"]
 
-        df_full = pd.DataFrame(
-            {"Data": full_dates.date, "Liquidez ($)": simulated_values}
-        )
+          # Simulação de APR Histórico (Acumulado)
+          dias_array = np.arange(1, num_pontos + 1)
+          fees_progresso = np.linspace(0.1, total_fees_geradas_pool, num_pontos)
+          simulated_apr = (
+              (fees_progresso / pool["valor_inicial"])
+              * (365 / dias_array)
+              * 100
+              if pool["valor_inicial"] > 0
+              else np.zeros(num_pontos)
+          )
+          simulated_apr[-1] = apr_total
+
+        df_full = pd.DataFrame({
+            "Data": full_dates.date,
+            "Liquidez ($)": simulated_liquidez,
+            "APR das Fees (%)": simulated_apr,
+        })
 
         df_chart = df_full[
             (df_full["Data"] >= dt_inicio_sel)
             & (df_full["Data"] <= dt_fim_sel)
         ]
 
+        # Configuração visual consoante a métrica escolhida
+        if metric_choice == "Liquidez ($)":
+          y_col = "Liquidez ($)"
+          line_color = "#10b981"  # Verde
+        else:
+          y_col = "APR das Fees (%)"
+          line_color = "#8b5cf6"  # Roxo / Azul acentuado
+
         fig = px.line(
             df_chart,
             x="Data",
-            y="Liquidez ($)",
+            y=y_col,
             line_shape="spline",
             markers=True,
         )
-        fig.update_traces(line_color="#10b981", line_width=3)
+        fig.update_traces(line_color=line_color, line_width=3)
         fig.update_layout(
             template="plotly_dark",
-            height=250,
+            height=260,
             margin=dict(l=20, r=20, t=10, b=10),
             xaxis_title="",
             yaxis_title="",
@@ -642,7 +678,7 @@ else:
         # -------------------------------------------------------------
         # 2. BARRA DE ROLAMENTO
         # -------------------------------------------------------------
-        st.write("🟦 **Ajuste o Intervalo de Datas para calcular o APR:**")
+        st.write("🟦 **Ajuste o Intervalo de Datas:**")
         selected_range = st.slider(
             "Seleção de Intervalo",
             min_value=dt_entrada,
@@ -654,7 +690,7 @@ else:
         )
 
         # -------------------------------------------------------------
-        # 3. RESULTADOS DO APR
+        # 3. RESULTADOS DO APR NO INTERVALO
         # -------------------------------------------------------------
         dt_inicio_sel, dt_fim_sel = selected_range
         dias_selecionados = (dt_fim_sel - dt_inicio_sel).days
