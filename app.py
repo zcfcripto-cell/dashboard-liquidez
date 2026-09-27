@@ -338,6 +338,7 @@ if "ocultar_detalhes" not in st.session_state:
 DEX_OPTIONS = [
     "Raydium",
     "Uniswap v3",
+    "Uniswap v4",
     "Orca",
     "Kamino",
     "PancakeSwap",
