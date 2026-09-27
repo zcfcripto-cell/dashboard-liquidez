@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
-# CONSULTA DE PREÇO/VALOR ON-CHAIN (DEXSCREENER & SOLANA RPC)
+# CONSULTA DE PREÇO/VALOR ON-CHAIN (DEXSCREENER API)
 # -------------------------------------------------------------
 
 
@@ -303,14 +303,19 @@ DEX_OPTIONS = [
 ]
 
 
-# Popup de Sincronização e Atualização Manual
-@st.dialog("Sincronização On-Chain")
-def modal_sincronizar_carteira(pool_id):
+# Popup de Sincronização e Atualização
+@st.dialog("Sincronização / Atualização da Pool")
+def modal_sincronizar_carteira(pool_id, preco_sugerido=None):
   pool = next((p for p in pools_data if p["id"] == pool_id), None)
   if pool is not None:
-    st.write(
-        "💡 Insere o **Endereço do Par (DexScreener)** para obter a cotação em"
-        " tempo real ou atualiza diretamente o teu valor de posição."
+    if preco_sugerido:
+      st.info(f"💡 Cotação detetada no DexScreener: **${preco_sugerido:,.6f}**")
+
+    # Garante que o valor padrão não abre a 0 se já existia um valor anterior
+    val_default = (
+        float(pool["valor_atual"])
+        if pool["valor_atual"] > 0
+        else float(pool["valor_inicial"])
     )
 
     with st.form(key=f"form_sync_modal_{pool_id}"):
@@ -319,16 +324,16 @@ def modal_sincronizar_carteira(pool_id):
           value=pool.get("wallet_address", ""),
       )
       v_manual = st.number_input(
-          "Novo Valor Atual da Pool ($ USD):",
+          "Valor Atual da Pool ($ USD):",
           min_value=0.0,
-          value=float(pool["valor_atual"]),
+          value=val_default,
           step=10.0,
       )
       f_manual = st.number_input(
-          "Novas Fees Pendentes ($ USD):",
+          "Fees Pendentes ($ USD):",
           min_value=0.0,
           value=float(pool["fees_nao_coletadas"]),
-          step=1.0,
+          step=0.1,
       )
 
       sub = st.form_submit_button(
@@ -627,8 +632,7 @@ else:
               price_usd, liq_usd = get_dexscreener_pair_data(addr)
 
               if price_usd and price_usd > 0:
-                st.success(f"Preço do Par no DexScreener: ${price_usd:,.6f}")
-                modal_sincronizar_carteira(pool["id"])
+                modal_sincronizar_carteira(pool["id"], preco_sugerido=price_usd)
               else:
                 modal_sincronizar_carteira(pool["id"])
 
