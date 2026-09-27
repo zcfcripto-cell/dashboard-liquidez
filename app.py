@@ -28,10 +28,7 @@ def get_wallet_pool_positions(wallet_address: str):
 
   wallet = wallet_address.strip()
 
-  # 1. Tentar consultar via API da DeBank (Melhor suporte EVM + Solana)
-  # Usamos um endpoint público/proxy de agregação de portfólio
   try:
-    # Exemplo com API pública de agregação de liquidez
     url = f"https://api.debank.com/user/protocol_list?id={wallet}"
     headers = {"User-Agent": "Mozilla/5.0"}
     res = requests.get(url, headers=headers, timeout=8)
@@ -43,12 +40,10 @@ def get_wallet_pool_positions(wallet_address: str):
         total_unclaimed_fees = 0.0
 
         for item in data["data"]:
-          # Filtra posições de liquidez
           portfolio_list = item.get("portfolio_item_list", [])
           for p in portfolio_list:
             stats = p.get("stats", {})
             total_pool_val += float(stats.get("asset_usd_value", 0))
-            # Fees pendentes quando disponíveis
             detail = p.get("detail", {})
             if "unclaimed_token_list" in detail:
               for fee_tok in detail["unclaimed_token_list"]:
@@ -60,30 +55,6 @@ def get_wallet_pool_positions(wallet_address: str):
           return total_pool_val, total_unclaimed_fees
   except Exception:
     pass
-
-  # 2. Fallback para Solana RPC / Solscan caso seja um endereço nativo Solana
-  if len(wallet) > 30 and not wallet.startswith("0x"):
-    try:
-      # Consulta alternativa de saldo e tokens SPL Solana
-      url_sol = f"https://api.mainnet-beta.solana.com"
-      payload = {
-          "jsonrpc": "2.0",
-          "id": 1,
-          "method": "getTokenAccountsByOwner",
-          "params": [
-              wallet,
-              {
-                  "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-              },  # SPL Token Program
-              {"encoding": "jsonParsed"},
-          ],
-      }
-      res_sol = requests.post(url_sol, json=payload, timeout=8)
-      if res_sol.status_code == 200:
-        # Lê os saldos de tokens
-        pass
-    except Exception:
-      pass
 
   return None, None
 
@@ -351,7 +322,56 @@ DEX_OPTIONS = [
 ]
 
 
-# Modal para editar pool
+# Modal para inserir/atualizar dados da carteira diretamente
+@st.dialog("Sincronização On-Chain (Dados da Carteira)")
+def modal_sincronizar_carteira(pool_id):
+  pool = next((p for p in pools_data if p["id"] == pool_id), None)
+  if pool is not None:
+    st.write(
+        "⚠️ Não foram detetadas alterações automáticas para a carteira atual ou"
+        " a pool requer um ID/Endereço exato de posição."
+    )
+    st.subheader(f"Configurar Endereço - {pool['par']}")
+
+    with st.form(key=f"form_sync_modal_{pool_id}"):
+      novo_end = st.text_input(
+          "Endereço da Carteira Pública ou ID da Posição NFT:",
+          value=pool.get("wallet_address", ""),
+          help="Exemplo: 0x... (EVM) ou endereço de conta Solana",
+      )
+      valor_manual_sugerido = st.number_input(
+          "Valor Atual Manual (USD) [Opcional]:",
+          min_value=0.0,
+          value=float(pool["valor_atual"]),
+          step=10.0,
+      )
+      fees_manual_sugerido = st.number_input(
+          "Fees Pendentes Manual (USD) [Opcional]:",
+          min_value=0.0,
+          value=float(pool["fees_nao_coletadas"]),
+          step=1.0,
+      )
+
+      sub = st.form_submit_button(
+          "Guardar e Re-sincronizar", type="primary", use_container_width=True
+      )
+      if sub:
+        data_ent = pool.get("data_entrada", datetime.date.today())
+        if isinstance(data_ent, str):
+          data_ent = datetime.datetime.strptime(data_ent, "%Y-%m-%d").date()
+
+        update_pool_db(
+            pool_id,
+            valor_manual_sugerido,
+            fees_manual_sugerido,
+            data_ent,
+            novo_end,
+        )
+        st.success("Dados da carteira guardados com sucesso!")
+        st.rerun()
+
+
+# Modal para editar pool geral
 @st.dialog("Atualizar Pool")
 def modal_atualizar_pool(pool_id):
   pool = next((p for p in pools_data if p["id"] == pool_id), None)
@@ -379,10 +399,6 @@ def modal_atualizar_pool(pool_id):
       end_carteira = st.text_input(
           "Endereço da Tua Carteira (EVM ou Solana)",
           value=pool.get("wallet_address", ""),
-          help=(
-              "Coloca aqui o teu endereço de carteira (ex: 0x... para EVM ou"
-              " 45ss... para Solana)"
-          ),
       )
       nova_data_entrada = st.date_input("Data de Entrada", value=data_ori)
 
@@ -632,10 +648,7 @@ else:
         if btn2.button(f"🔗 Sincronizar On-Chain", key=f"sync_{pool['id']}"):
           addr = pool.get("wallet_address", "")
           if not addr:
-            st.warning(
-                "Nenhum endereço de carteira associado. Clica em 'Editar' para"
-                " adicionar o teu endereço público."
-            )
+            modal_sincronizar_carteira(pool["id"])
           else:
             with st.spinner("A sincronizar dados On-Chain..."):
               novo_val, novas_fees = get_wallet_pool_positions(addr)
@@ -653,10 +666,8 @@ else:
                 )
                 st.rerun()
               else:
-                st.info(
-                    "Sincronização concluída. Não foram detetadas alterações"
-                    " no valor ou a carteira requer um ID de posição direto."
-                )
+                # ABRE O POPUP DIRETAMENTE SE NÃO DETETAR ALTERAÇÕES AUTOMÁTICAS
+                modal_sincronizar_carteira(pool["id"])
 
         if btn3.button(f"🔄 Reinvestir", key=f"reinvest_{pool['id']}"):
           if pool["fees_nao_coletadas"] > 0:
