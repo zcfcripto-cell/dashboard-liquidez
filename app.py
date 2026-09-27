@@ -1,8 +1,10 @@
 import datetime
+import json
 import sqlite3
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 
 st.set_page_config(
@@ -12,13 +14,40 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
+# LIGAÇÃO ON-CHAIN (BLOCKCHAIN RPC)
+# -------------------------------------------------------------
+SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
+
+
+def get_solana_balance(wallet_address: str):
+  """Lê o saldo em SOL nativo de um endereço diretamente do nó da Solana."""
+  if not wallet_address:
+    return None
+  payload = {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "getBalance",
+      "params": [wallet_address.strip()],
+  }
+  try:
+    res = requests.post(SOLANA_RPC_URL, json=payload, timeout=8)
+    data = res.json()
+    if "result" in data and "value" in data["result"]:
+      lamports = data["result"]["value"]
+      return lamports / 1e9  # Converter Lamports para SOL
+  except Exception as e:
+    st.error(f"Erro ao consultar RPC Solana: {e}")
+  return None
+
+
+# -------------------------------------------------------------
 # BASE DE DADOS SQLITE (PERSISTÊNCIA DE DADOS)
 # -------------------------------------------------------------
 DB_FILE = "pools_data.db"
 
 
 def init_db():
-  """Cria a tabela se não existir e insere a pool inicial caso esteja vazia."""
+  """Cria a tabela se não existir e adiciona a coluna de carteira/NFT."""
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
   c.execute("""
@@ -34,17 +63,25 @@ def init_db():
             fees_nao_coletadas REAL,
             range_min REAL,
             range_max REAL,
-            data_entrada TEXT
+            data_entrada TEXT,
+            wallet_address TEXT
         )
     """)
   conn.commit()
+
+  # Verificar se a coluna wallet_address existe (para bases de dados já existentes)
+  c.execute("PRAGMA table_info(pools)")
+  columns = [col[1] for col in c.fetchall()]
+  if "wallet_address" not in columns:
+    c.execute("ALTER TABLE pools ADD COLUMN wallet_address TEXT")
+    conn.commit()
 
   c.execute("SELECT COUNT(*) FROM pools")
   if c.fetchone()[0] == 0:
     c.execute(
         """
-            INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees_sacadas, fees_reinvestidas, fees_nao_coletadas, range_min, range_max, data_entrada)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees_sacadas, fees_reinvestidas, fees_nao_coletadas, range_min, range_max, data_entrada, wallet_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "SOL/PUMP",
@@ -58,6 +95,7 @@ def init_db():
             19469.55,
             30933.15,
             "2026-08-20",
+            "",
         ),
     )
     conn.commit()
@@ -92,6 +130,7 @@ def load_pools():
         "range_min": float(r[9]),
         "range_max": float(r[10]),
         "data_entrada": dt_ent,
+        "wallet_address": r[12] if len(r) > 12 and r[12] else "",
     })
   return pools
 
@@ -107,14 +146,15 @@ def add_pool_db(
     r_min,
     r_max,
     data_in,
+    wallet_addr,
 ):
   """Adiciona uma nova pool à base de dados."""
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
   c.execute(
       """
-        INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees_sacadas, fees_reinvestidas, fees_nao_coletadas, range_min, range_max, data_entrada)
-        VALUES (?, ?, 'Ativa', ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees_sacadas, fees_reinvestidas, fees_nao_coletadas, range_min, range_max, data_entrada, wallet_address)
+        VALUES (?, ?, 'Ativa', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
       (
           par,
@@ -127,30 +167,38 @@ def add_pool_db(
           r_min,
           r_max,
           data_in.strftime("%Y-%m-%d"),
+          wallet_addr,
       ),
   )
   conn.commit()
   conn.close()
 
 
-def update_pool_db(pool_id, valor_atual, fees_pendentes, data_entrada):
+def update_pool_db(
+    pool_id, valor_atual, fees_pendentes, data_entrada, wallet_addr=""
+):
   """Atualiza os dados de uma pool na base de dados."""
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
   c.execute(
       """
         UPDATE pools 
-        SET valor_atual = ?, fees_nao_coletadas = ?, data_entrada = ?
+        SET valor_atual = ?, fees_nao_coletadas = ?, data_entrada = ?, wallet_address = ?
         WHERE id = ?
     """,
-      (valor_atual, fees_pendentes, data_entrada.strftime("%Y-%m-%d"), pool_id),
+      (
+          valor_atual,
+          fees_pendentes,
+          data_entrada.strftime("%Y-%m-%d"),
+          wallet_addr,
+          pool_id,
+      ),
   )
   conn.commit()
   conn.close()
 
 
 def update_pool_status_db(pool_id, novo_estado):
-  """Atualiza o estado (Ativa/Fechada) de uma pool."""
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
   c.execute(
@@ -161,7 +209,6 @@ def update_pool_status_db(pool_id, novo_estado):
 
 
 def update_pool_fees_db(pool_id, novo_v_atual, f_sac, f_reinv, f_pend):
-  """Atualiza as fees e valor atual após saque ou reinvestimento."""
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
   c.execute(
@@ -177,7 +224,6 @@ def update_pool_fees_db(pool_id, novo_v_atual, f_sac, f_reinv, f_pend):
 
 
 def delete_pool_db(pool_id):
-  """Elimina uma pool da base de dados."""
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
   c.execute("DELETE FROM pools WHERE id = ?", (pool_id,))
@@ -186,7 +232,6 @@ def delete_pool_db(pool_id):
 
 
 def clear_all_pools_db():
-  """Elimina todas as pools da base de dados."""
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
   c.execute("DELETE FROM pools")
@@ -197,7 +242,7 @@ def clear_all_pools_db():
 # Inicializar Base de Dados
 init_db()
 
-# Estilo personalizado para os cartões e barra azul grossa
+# Estilos CSS
 st.markdown(
     """
     <style>
@@ -217,8 +262,6 @@ st.markdown(
         font-size: 12px;
         font-weight: bold;
     }
-
-    /* ESTILO DA BARRA DE ROLAMENTO: AZUL E GROSSA */
     div[data-baseweb="slider"] {
         padding-top: 15px !important;
         padding-bottom: 15px !important;
@@ -266,7 +309,7 @@ DEX_OPTIONS = [
 ]
 
 
-# Modal para atualizar pool
+# Modal para editar pool
 @st.dialog("Atualizar Pool")
 def modal_atualizar_pool(pool_id):
   pool = next((p for p in pools_data if p["id"] == pool_id), None)
@@ -285,14 +328,16 @@ def modal_atualizar_pool(pool_id):
           value=float(pool["valor_atual"]),
           step=1.0,
       )
-
       novas_fees_pendentes = st.number_input(
           "Fees Acumuladas Pendentes (USD)",
           min_value=0.0,
           value=float(pool["fees_nao_coletadas"]),
           step=0.1,
       )
-
+      end_carteira = st.text_input(
+          "Endereço Carteira / NFT Posição",
+          value=pool.get("wallet_address", ""),
+      )
       nova_data_entrada = st.date_input("Data de Entrada", value=data_ori)
 
       submitted = st.form_submit_button(
@@ -301,7 +346,11 @@ def modal_atualizar_pool(pool_id):
 
       if submitted:
         update_pool_db(
-            pool_id, novo_valor_atual, novas_fees_pendentes, nova_data_entrada
+            pool_id,
+            novo_valor_atual,
+            novas_fees_pendentes,
+            nova_data_entrada,
+            end_carteira,
         )
         st.success(f"Pool ({pool['par']}) atualizada com sucesso!")
         st.rerun()
@@ -312,7 +361,7 @@ with st.sidebar:
   st.header("➕ Adicionar Nova Pool")
 
   with st.form("nova_pool_form", clear_on_submit=True):
-    par = st.text_input("Par (ex: COIN/USDC)", key="form_par")
+    par = st.text_input("Par (ex: SOL/PUMP)", key="form_par")
     rede = st.text_input("Rede / Plataforma (ex: SOLANA)", key="form_rede")
     dex = st.selectbox("DEX", DEX_OPTIONS, key="form_dex")
     v_init = st.number_input("Valor Inicial ($)", min_value=0.0, key="form_v_init")
@@ -327,6 +376,9 @@ with st.sidebar:
     )
     fees_pendentes = st.number_input(
         "Fees Pendentes ($)", min_value=0.0, key="form_fees_pendentes"
+    )
+    wallet_addr = st.text_input(
+        "Endereço Carteira / NFT (On-Chain)", key="form_wallet_addr"
     )
     col_r1, col_r2 = st.columns(2)
     r_min = col_r1.number_input("Range Mín ($)", key="form_r_min")
@@ -351,9 +403,10 @@ with st.sidebar:
           float(r_min),
           float(r_max),
           data_in,
+          wallet_addr,
       )
 
-      st.success("Pool adicionada e guardada com sucesso!")
+      st.success("Pool adicionada com sucesso!")
       st.rerun()
 
   st.markdown("---")
@@ -361,9 +414,7 @@ with st.sidebar:
     clear_all_pools_db()
     st.rerun()
 
-# -------------------------------------------------------------
-# CÁLCULOS DO AGREGADO GERAL (TOPO)
-# -------------------------------------------------------------
+# CÁLCULOS DO RESUMO GERAL
 total_liquidez = sum(p["valor_atual"] for p in pools_data)
 total_fees_geradas = sum(
     p["fees_sacadas"] + p["fees_reinvestidas"] for p in pools_data
@@ -399,7 +450,7 @@ media_apr_fees = (
     sum(aprs_com_peso) / total_valor_inicial if total_valor_inicial > 0 else 0.0
 )
 
-# EXIBIÇÃO DAS MÉTRICAS AGREGADAS NO TOPO
+# RESUMO GERAL
 st.markdown("### 📌 Resumo Geral do Portfólio")
 col_top1, col_top2, col_top3, col_top4 = st.columns([2, 2, 2, 2])
 
@@ -411,9 +462,9 @@ with col_top3:
   st.metric("Média do APR das Fees", f"{media_apr_fees:.2f}%")
 with col_top4:
   label_btn = (
-      "👁️ Mostrar Detalhes das Pools"
+      "👁️ Mostrar Detalhes"
       if st.session_state.ocultar_detalhes
-      else "🙈 Esconder Detalhes das Pools"
+      else "🙈 Esconder Detalhes"
   )
   if st.button(label_btn, use_container_width=True):
     st.session_state.ocultar_detalhes = not st.session_state.ocultar_detalhes
@@ -421,7 +472,6 @@ with col_top4:
 
 st.markdown("---")
 
-# Exibir Pools
 if not pools_data:
   st.info(
       "Nenhuma piscina registada. Utiliza o painel lateral para adicionar."
@@ -443,14 +493,13 @@ else:
           "Valor Atual ($)": f"${p['valor_atual']:,.2f}",
           "Fees Geradas ($)": f"${f_sac + f_reinv:,.2f}",
           "Fees Pendentes ($)": f"${f_pend:,.2f}",
-          "Range Mín": f"{p['range_min']:,.2f}",
-          "Range Máx": f"{p['range_max']:,.2f}",
+          "Endereço Carteira": p.get("wallet_address", "-"),
       })
     df_resumo = pd.DataFrame(resumo_list)
     st.dataframe(df_resumo, use_container_width=True, hide_index=True)
 
   else:
-    # MODO DETALHADO (COMPLETO)
+    # MODO COMPLETO DAS POOLS
     for idx, pool in enumerate(pools_data, start=1):
       dt_entrada = pool.get("data_entrada", datetime.date.today())
       if isinstance(dt_entrada, str):
@@ -469,7 +518,6 @@ else:
           + pool["fees_reinvestidas"]
           + pool["fees_nao_coletadas"]
       )
-
       pnl = (pool["valor_atual"] + pool["fees_sacadas"]) - pool["valor_inicial"]
       variacao_pct = (
           (
@@ -480,7 +528,6 @@ else:
           if pool["valor_inicial"] > 0
           else 0
       )
-
       apr_total = (
           (total_fees_geradas_pool / pool["valor_inicial"])
           * (365 / dias_totais)
@@ -489,7 +536,6 @@ else:
           else 0
       )
 
-      # Cartão Container
       with st.container():
         c_head1, c_head2 = st.columns([2, 3])
 
@@ -520,7 +566,6 @@ else:
           m4.metric("APR Total", f"{apr_total:.2f}%")
           m5.metric("Fees Pendentes", f"${pool['fees_nao_coletadas']:,.2f}")
 
-        # Blocos de métricas secundárias
         b1, b2, b3, b4 = st.columns(4)
         b1.info(f"**Valor Inicial:** ${pool['valor_inicial']:,.2f}")
         b2.info(f"**Dias Ativos Totais:** {dias_totais} dias")
@@ -533,13 +578,31 @@ else:
             f" {pool['range_max']:,.2f}"
         )
 
-        # Botões de Ação
-        btn1, btn2, btn3, btn4, btn5 = st.columns(5)
+        # BOTOES DE AÇÃO
+        btn1, btn2, btn3, btn4, btn5, btn6 = st.columns(6)
 
-        if btn1.button(f"✏️ Atualizar Pool", key=f"edit_{pool['id']}"):
+        if btn1.button(f"✏️ Editar", key=f"edit_{pool['id']}"):
           modal_atualizar_pool(pool["id"])
 
-        if btn2.button(f"🔄 Reinvestir Fees", key=f"reinvest_{pool['id']}"):
+        if btn2.button(f"🔗 Sincronizar On-Chain", key=f"sync_{pool['id']}"):
+          addr = pool.get("wallet_address", "")
+          if not addr:
+            st.warning(
+                "Nenhum endereço Web3/Solana associado a esta pool. Edite a"
+                " pool para adicionar."
+            )
+          else:
+            with st.spinner("A consultar a blockchain..."):
+              saldo_sol = get_solana_balance(addr)
+              if saldo_sol is not None:
+                st.success(
+                    f"Saldo lido On-Chain: {saldo_sol:.4f} SOL para o endereço"
+                    f" {addr[:6]}...{addr[-4:]}"
+                )
+              else:
+                st.error("Não foi possível obter dados da blockchain.")
+
+        if btn3.button(f"🔄 Reinvestir", key=f"reinvest_{pool['id']}"):
           if pool["fees_nao_coletadas"] > 0:
             fees_temp = pool["fees_nao_coletadas"]
             novo_v_atual = pool["valor_atual"] + fees_temp
@@ -551,12 +614,10 @@ else:
                 novas_reinv,
                 0.0,
             )
-            st.success(f"${fees_temp:,.2f} reinvestidos com sucesso!")
+            st.success(f"${fees_temp:,.2f} reinvestidos!")
             st.rerun()
-          else:
-            st.warning("Não há fees pendentes para reinvestir.")
 
-        if btn3.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
+        if btn4.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
           if pool["fees_nao_coletadas"] > 0:
             fees_temp = pool["fees_nao_coletadas"]
             novas_sacadas = pool["fees_sacadas"] + fees_temp
@@ -567,33 +628,25 @@ else:
                 pool["fees_reinvestidas"],
                 0.0,
             )
-            st.success(f"${fees_temp:,.2f} sacados para a carteira!")
+            st.success(f"${fees_temp:,.2f} sacados!")
             st.rerun()
-          else:
-            st.warning("Não há fees pendentes para sacar.")
 
-        if btn4.button(
-            f"🔒 Fechar / Ativar", key=f"close_{pool['id']}"
-        ):
+        if btn5.button(f"🔒 Fechar/Ativar", key=f"close_{pool['id']}"):
           novo_st = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
           update_pool_status_db(pool["id"], novo_st)
           st.rerun()
 
-        if btn5.button(f"🗑️ Excluir", key=f"del_{pool['id']}"):
+        if btn6.button(f"🗑️ Excluir", key=f"del_{pool['id']}"):
           delete_pool_db(pool["id"])
           st.rerun()
 
-        # -------------------------------------------------------------
-        # 1. BOTÕES DE SELEÇÃO DA MÉTRICA DO GRÁFICO (LIQUIDEZ vs APR)
-        # -------------------------------------------------------------
+        # GRÁFICO E ALTERNADOR
         st.write(" ")
         col_g_title, col_g_btn = st.columns([2, 3])
-
         with col_g_title:
           st.subheader("📈 Histórico Analítico")
 
         with col_g_btn:
-          # Alternador entre Liquidez e APR das Fees
           metric_choice = st.radio(
               "Métrica do Gráfico",
               options=["Liquidez ($)", "APR das Fees (%)"],
@@ -607,18 +660,14 @@ else:
           st.session_state[slider_key] = (dt_entrada, dt_hoje)
 
         dt_inicio_sel, dt_fim_sel = st.session_state[slider_key]
-
         full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
         num_pontos = len(full_dates)
 
-        # Simulação e cálculo de dados históricos
         if num_pontos == 1:
           simulated_liquidez = [pool["valor_atual"]]
           simulated_apr = [apr_total]
         else:
           np.random.seed(pool["id"])
-
-          # Simulação de Liquidez
           ruido_liq = np.cumsum(np.random.normal(0, 2, size=num_pontos))
           ruido_liq = ruido_liq - ruido_liq[0]
           tendencia_liq = np.linspace(
@@ -627,7 +676,6 @@ else:
           simulated_liquidez = tendencia_liq + ruido_liq
           simulated_liquidez[-1] = pool["valor_atual"]
 
-          # Simulação de APR Histórico (Acumulado)
           dias_array = np.arange(1, num_pontos + 1)
           fees_progresso = np.linspace(0.1, total_fees_geradas_pool, num_pontos)
           simulated_apr = (
@@ -650,20 +698,15 @@ else:
             & (df_full["Data"] <= dt_fim_sel)
         ]
 
-        # Configuração visual consoante a métrica escolhida
         if metric_choice == "Liquidez ($)":
           y_col = "Liquidez ($)"
-          line_color = "#10b981"  # Verde
+          line_color = "#10b981"
         else:
           y_col = "APR das Fees (%)"
-          line_color = "#8b5cf6"  # Roxo / Azul acentuado
+          line_color = "#8b5cf6"
 
         fig = px.line(
-            df_chart,
-            x="Data",
-            y=y_col,
-            line_shape="spline",
-            markers=True,
+            df_chart, x="Data", y=y_col, line_shape="spline", markers=True
         )
         fig.update_traces(line_color=line_color, line_width=3)
         fig.update_layout(
@@ -675,9 +718,7 @@ else:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # -------------------------------------------------------------
-        # 2. BARRA DE ROLAMENTO
-        # -------------------------------------------------------------
+        # BARRA DE ROLAMENTO DE DATAS
         st.write("🟦 **Ajuste o Intervalo de Datas:**")
         selected_range = st.slider(
             "Seleção de Intervalo",
@@ -689,9 +730,6 @@ else:
             label_visibility="collapsed",
         )
 
-        # -------------------------------------------------------------
-        # 3. RESULTADOS DO APR NO INTERVALO
-        # -------------------------------------------------------------
         dt_inicio_sel, dt_fim_sel = selected_range
         dias_selecionados = (dt_fim_sel - dt_inicio_sel).days
         if dias_selecionados <= 0:
