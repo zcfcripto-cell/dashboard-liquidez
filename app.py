@@ -14,48 +14,29 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
-# CONSULTA ON-CHAIN MULTI-CHAIN (EVM + SOLANA)
+# CONSULTA DE PREÇO/VALOR ON-CHAIN (DEXSCREENER & SOLANA RPC)
 # -------------------------------------------------------------
 
 
-def get_wallet_pool_positions(wallet_address: str):
-  """Consulta as posições de liquidez ativas de uma carteira (EVM e Solana).
-
-  Retorna o valor total investido nas pools e as fees pendentes estimadas.
-  """
-  if not wallet_address:
+def get_dexscreener_pair_data(pair_address: str):
+  """Obtém o preço em tempo real e a liquidez do par no DexScreener."""
+  if not pair_address:
     return None, None
-
-  wallet = wallet_address.strip()
-
+  clean_addr = pair_address.strip()
+  url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{clean_addr}"
   try:
-    url = f"https://api.debank.com/user/protocol_list?id={wallet}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(url, headers=headers, timeout=8)
-
+    res = requests.get(url, timeout=8)
     if res.status_code == 200:
       data = res.json()
-      if "data" in data and data["data"]:
-        total_pool_val = 0.0
-        total_unclaimed_fees = 0.0
-
-        for item in data["data"]:
-          portfolio_list = item.get("portfolio_item_list", [])
-          for p in portfolio_list:
-            stats = p.get("stats", {})
-            total_pool_val += float(stats.get("asset_usd_value", 0))
-            detail = p.get("detail", {})
-            if "unclaimed_token_list" in detail:
-              for fee_tok in detail["unclaimed_token_list"]:
-                total_unclaimed_fees += float(
-                    fee_tok.get("price", 0) * fee_tok.get("amount", 0)
-                )
-
-        if total_pool_val > 0:
-          return total_pool_val, total_unclaimed_fees
+      if data and "pair" in data and data["pair"]:
+        pair = data["pair"]
+        price_usd = float(pair.get("priceUsd", 0))
+        liquidity_usd = float(
+            pair.get("liquidity", {}).get("usd", 0)
+        )
+        return price_usd, liquidity_usd
   except Exception:
     pass
-
   return None, None
 
 
@@ -322,52 +303,44 @@ DEX_OPTIONS = [
 ]
 
 
-# Modal para inserir/atualizar dados da carteira diretamente
-@st.dialog("Sincronização On-Chain (Dados da Carteira)")
+# Popup de Sincronização e Atualização Manual
+@st.dialog("Sincronização On-Chain")
 def modal_sincronizar_carteira(pool_id):
   pool = next((p for p in pools_data if p["id"] == pool_id), None)
   if pool is not None:
     st.write(
-        "⚠️ Não foram detetadas alterações automáticas para a carteira atual ou"
-        " a pool requer um ID/Endereço exato de posição."
+        "💡 Insere o **Endereço do Par (DexScreener)** para obter a cotação em"
+        " tempo real ou atualiza diretamente o teu valor de posição."
     )
-    st.subheader(f"Configurar Endereço - {pool['par']}")
 
     with st.form(key=f"form_sync_modal_{pool_id}"):
       novo_end = st.text_input(
-          "Endereço da Carteira Pública ou ID da Posição NFT:",
+          "Endereço da Carteira ou ID do Par (DexScreener):",
           value=pool.get("wallet_address", ""),
-          help="Exemplo: 0x... (EVM) ou endereço de conta Solana",
       )
-      valor_manual_sugerido = st.number_input(
-          "Valor Atual Manual (USD) [Opcional]:",
+      v_manual = st.number_input(
+          "Novo Valor Atual da Pool ($ USD):",
           min_value=0.0,
           value=float(pool["valor_atual"]),
           step=10.0,
       )
-      fees_manual_sugerido = st.number_input(
-          "Fees Pendentes Manual (USD) [Opcional]:",
+      f_manual = st.number_input(
+          "Novas Fees Pendentes ($ USD):",
           min_value=0.0,
           value=float(pool["fees_nao_coletadas"]),
           step=1.0,
       )
 
       sub = st.form_submit_button(
-          "Guardar e Re-sincronizar", type="primary", use_container_width=True
+          "Guardar e Atualizar", type="primary", use_container_width=True
       )
       if sub:
         data_ent = pool.get("data_entrada", datetime.date.today())
         if isinstance(data_ent, str):
           data_ent = datetime.datetime.strptime(data_ent, "%Y-%m-%d").date()
 
-        update_pool_db(
-            pool_id,
-            valor_manual_sugerido,
-            fees_manual_sugerido,
-            data_ent,
-            novo_end,
-        )
-        st.success("Dados da carteira guardados com sucesso!")
+        update_pool_db(pool_id, v_manual, f_manual, data_ent, novo_end)
+        st.success("Pool atualizada com sucesso!")
         st.rerun()
 
 
@@ -397,7 +370,7 @@ def modal_atualizar_pool(pool_id):
           step=0.1,
       )
       end_carteira = st.text_input(
-          "Endereço da Tua Carteira (EVM ou Solana)",
+          "Endereço da Tua Carteira / Par DexScreener",
           value=pool.get("wallet_address", ""),
       )
       nova_data_entrada = st.date_input("Data de Entrada", value=data_ori)
@@ -440,7 +413,7 @@ with st.sidebar:
         "Fees Pendentes ($)", min_value=0.0, key="form_fees_pendentes"
     )
     wallet_addr = st.text_input(
-        "Endereço da Carteira (Pública)", key="form_wallet_addr"
+        "Endereço da Carteira / Par DexScreener", key="form_wallet_addr"
     )
     col_r1, col_r2 = st.columns(2)
     r_min = col_r1.number_input("Range Mín ($)", key="form_r_min")
@@ -555,7 +528,7 @@ else:
           "Valor Atual ($)": f"${p['valor_atual']:,.2f}",
           "Fees Geradas ($)": f"${f_sac + f_reinv:,.2f}",
           "Fees Pendentes ($)": f"${f_pend:,.2f}",
-          "Endereço Carteira": p.get("wallet_address", "-"),
+          "Endereço / Par": p.get("wallet_address", "-"),
       })
     df_resumo = pd.DataFrame(resumo_list)
     st.dataframe(df_resumo, use_container_width=True, hide_index=True)
@@ -650,23 +623,13 @@ else:
           if not addr:
             modal_sincronizar_carteira(pool["id"])
           else:
-            with st.spinner("A sincronizar dados On-Chain..."):
-              novo_val, novas_fees = get_wallet_pool_positions(addr)
+            with st.spinner("A consultar DexScreener..."):
+              price_usd, liq_usd = get_dexscreener_pair_data(addr)
 
-              if novo_val is not None and novo_val > 0:
-                update_pool_db(
-                    pool["id"],
-                    novo_val,
-                    novas_fees if novas_fees else pool["fees_nao_coletadas"],
-                    dt_entrada,
-                    addr,
-                )
-                st.success(
-                    f"Sincronizado com sucesso! Novo Valor: ${novo_val:,.2f}"
-                )
-                st.rerun()
+              if price_usd and price_usd > 0:
+                st.success(f"Preço do Par no DexScreener: ${price_usd:,.6f}")
+                modal_sincronizar_carteira(pool["id"])
               else:
-                # ABRE O POPUP DIRETAMENTE SE NÃO DETETAR ALTERAÇÕES AUTOMÁTICAS
                 modal_sincronizar_carteira(pool["id"])
 
         if btn3.button(f"🔄 Reinvestir", key=f"reinvest_{pool['id']}"):
