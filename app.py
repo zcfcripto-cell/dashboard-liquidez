@@ -110,7 +110,7 @@ def init_db():
             "Ativa",
             2203.0,
             2815.0,
-            25.00,
+            50.00,
             19.469550,
             30.933150,
             "2026-08-20",
@@ -236,7 +236,6 @@ def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
 
-  # 1. Registar o aporte na tabela de aportes
   c.execute(
       """
         INSERT INTO aportes (pool_id, valor, data_aporte)
@@ -245,7 +244,6 @@ def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
       (pool_id, valor_aporte, data_aporte.strftime("%Y-%m-%d")),
   )
 
-  # 2. Incrementar a liquidez (Valor Atual e Valor Inicial) na pool
   c.execute(
       """
         UPDATE pools 
@@ -356,6 +354,21 @@ st.markdown(
     div[data-baseweb="slider"] {
         padding-top: 10px !important;
         padding-bottom: 10px !important;
+    }
+
+    /* REDUÇÃO DO TAMANHO DAS MÉTRICAS PARA EVITAR CORTAR NÚMEROS (...) */
+    [data-testid="stMetricValue"] {
+        font-size: 1.35rem !important;
+        line-height: 1.2 !important;
+    }
+    
+    [data-testid="stMetricLabel"] {
+        font-size: 0.80rem !important;
+        margin-bottom: -4px !important;
+    }
+    
+    [data-testid="stMetricDelta"] {
+        font-size: 0.80rem !important;
     }
     </style>
 """,
@@ -725,7 +738,7 @@ else:
 
         st.write(" ")
 
-        # AÇÕES DA POOL (NOVO BOTÃO DE APORTE E HISTÓRICO)
+        # AÇÕES DA POOL
         col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
 
         if col_b1.button(
