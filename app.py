@@ -58,7 +58,7 @@ def fetch_onchain_position_and_price(position_nft_address: str):
 
 
 # -------------------------------------------------------------
-# BASE DE DADOS SQLITE
+# BASE DE DADOS SQLITE (POOLS E APORTES)
 # -------------------------------------------------------------
 DB_FILE = "pools_data.db"
 
@@ -66,6 +66,8 @@ DB_FILE = "pools_data.db"
 def init_db():
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
+
+  # Tabela Principal das Pools
   c.execute("""
         CREATE TABLE IF NOT EXISTS pools (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,29 +76,33 @@ def init_db():
             estado TEXT,
             valor_inicial REAL,
             valor_atual REAL,
-            fees_sacadas REAL,
-            fees_reinvestidas REAL,
-            fees_nao_coletadas REAL,
+            fees REAL,
             range_min REAL,
             range_max REAL,
             data_entrada TEXT,
             wallet_address TEXT
         )
     """)
-  conn.commit()
 
-  c.execute("PRAGMA table_info(pools)")
-  columns = [col[1] for col in c.fetchall()]
-  if "wallet_address" not in columns:
-    c.execute("ALTER TABLE pools ADD COLUMN wallet_address TEXT")
-    conn.commit()
+  # Tabela de Rastreio de Aportes
+  c.execute("""
+        CREATE TABLE IF NOT EXISTS aportes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pool_id INTEGER,
+            valor REAL,
+            data_aporte TEXT,
+            FOREIGN KEY (pool_id) REFERENCES pools (id) ON DELETE CASCADE
+        )
+    """)
+
+  conn.commit()
 
   c.execute("SELECT COUNT(*) FROM pools")
   if c.fetchone()[0] == 0:
     c.execute(
         """
-            INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees_sacadas, fees_reinvestidas, fees_nao_coletadas, range_min, range_max, data_entrada, wallet_address)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees, range_min, range_max, data_entrada, wallet_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "SOL/PUMP",
@@ -104,8 +110,6 @@ def init_db():
             "Ativa",
             2203.0,
             2815.0,
-            50.0,
-            0.0,
             25.00,
             19.469550,
             30.933150,
@@ -127,7 +131,7 @@ def load_pools():
   pools = []
   for r in rows:
     try:
-      dt_ent = datetime.datetime.strptime(r[11], "%Y-%m-%d").date()
+      dt_ent = datetime.datetime.strptime(r[9], "%Y-%m-%d").date()
     except Exception:
       dt_ent = datetime.date.today()
 
@@ -138,13 +142,11 @@ def load_pools():
         "estado": r[3],
         "valor_inicial": float(r[4]),
         "valor_atual": float(r[5]),
-        "fees_sacadas": float(r[6]),
-        "fees_reinvestidas": float(r[7]),
-        "fees_nao_coletadas": float(r[8]),
-        "range_min": float(r[9]),
-        "range_max": float(r[10]),
+        "fees": float(r[6]),
+        "range_min": float(r[7]),
+        "range_max": float(r[8]),
         "data_entrada": dt_ent,
-        "wallet_address": r[12] if len(r) > 12 and r[12] else "",
+        "wallet_address": r[10] if len(r) > 10 and r[10] else "",
     })
   return pools
 
@@ -154,9 +156,7 @@ def add_pool_db(
     rede,
     valor_inicial,
     valor_atual,
-    fees_sacadas,
-    fees_reinvestidas,
-    fees_pendentes,
+    fees,
     r_min,
     r_max,
     data_in,
@@ -166,17 +166,15 @@ def add_pool_db(
   c = conn.cursor()
   c.execute(
       """
-        INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees_sacadas, fees_reinvestidas, fees_nao_coletadas, range_min, range_max, data_entrada, wallet_address)
-        VALUES (?, ?, 'Ativa', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees, range_min, range_max, data_entrada, wallet_address)
+        VALUES (?, ?, 'Ativa', ?, ?, ?, ?, ?, ?, ?)
     """,
       (
           par,
           rede,
           valor_inicial,
           valor_atual,
-          fees_sacadas,
-          fees_reinvestidas,
-          fees_pendentes,
+          fees,
           r_min,
           r_max,
           data_in.strftime("%Y-%m-%d"),
@@ -190,7 +188,7 @@ def add_pool_db(
 def update_pool_db(
     pool_id,
     valor_atual,
-    fees_pendentes,
+    fees,
     data_entrada,
     wallet_addr="",
     r_min=None,
@@ -202,12 +200,12 @@ def update_pool_db(
     c.execute(
         """
             UPDATE pools 
-            SET valor_atual = ?, fees_nao_coletadas = ?, data_entrada = ?, wallet_address = ?, range_min = ?, range_max = ?
+            SET valor_atual = ?, fees = ?, data_entrada = ?, wallet_address = ?, range_min = ?, range_max = ?
             WHERE id = ?
         """,
         (
             valor_atual,
-            fees_pendentes,
+            fees,
             data_entrada.strftime("%Y-%m-%d"),
             wallet_addr,
             r_min,
@@ -219,12 +217,12 @@ def update_pool_db(
     c.execute(
         """
             UPDATE pools 
-            SET valor_atual = ?, fees_nao_coletadas = ?, data_entrada = ?, wallet_address = ?
+            SET valor_atual = ?, fees = ?, data_entrada = ?, wallet_address = ?
             WHERE id = ?
         """,
         (
             valor_atual,
-            fees_pendentes,
+            fees,
             data_entrada.strftime("%Y-%m-%d"),
             wallet_addr,
             pool_id,
@@ -232,6 +230,49 @@ def update_pool_db(
     )
   conn.commit()
   conn.close()
+
+
+def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+
+  # 1. Registar o aporte na tabela de aportes
+  c.execute(
+      """
+        INSERT INTO aportes (pool_id, valor, data_aporte)
+        VALUES (?, ?, ?)
+    """,
+      (pool_id, valor_aporte, data_aporte.strftime("%Y-%m-%d")),
+  )
+
+  # 2. Incrementar a liquidez (Valor Atual e Valor Inicial) na pool
+  c.execute(
+      """
+        UPDATE pools 
+        SET valor_atual = valor_atual + ?, valor_inicial = valor_inicial + ?
+        WHERE id = ?
+    """,
+      (valor_aporte, valor_aporte, pool_id),
+  )
+
+  conn.commit()
+  conn.close()
+
+
+def get_historico_aportes(pool_id):
+  conn = sqlite3.connect(DB_FILE)
+  c = conn.cursor()
+  c.execute(
+      """
+        SELECT data_aporte, valor FROM aportes 
+        WHERE pool_id = ? 
+        ORDER BY data_aporte DESC, id DESC
+    """,
+      (pool_id,),
+  )
+  rows = c.fetchall()
+  conn.close()
+  return rows
 
 
 def update_pool_status_db(pool_id, novo_estado):
@@ -244,25 +285,11 @@ def update_pool_status_db(pool_id, novo_estado):
   conn.close()
 
 
-def update_pool_fees_db(pool_id, novo_v_atual, f_sac, f_reinv, f_pend):
-  conn = sqlite3.connect(DB_FILE)
-  c = conn.cursor()
-  c.execute(
-      """
-        UPDATE pools 
-        SET valor_atual = ?, fees_sacadas = ?, fees_reinvestidas = ?, fees_nao_coletadas = ?
-        WHERE id = ?
-    """,
-      (novo_v_atual, f_sac, f_reinv, f_pend, pool_id),
-  )
-  conn.commit()
-  conn.close()
-
-
 def delete_pool_db(pool_id):
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
   c.execute("DELETE FROM pools WHERE id = ?", (pool_id,))
+  c.execute("DELETE FROM aportes WHERE pool_id = ?", (pool_id,))
   conn.commit()
   conn.close()
 
@@ -271,6 +298,7 @@ def clear_all_pools_db():
   conn = sqlite3.connect(DB_FILE)
   c = conn.cursor()
   c.execute("DELETE FROM pools")
+  c.execute("DELETE FROM aportes")
   conn.commit()
   conn.close()
 
@@ -278,26 +306,16 @@ def clear_all_pools_db():
 init_db()
 
 # -------------------------------------------------------------
-# ESTILOS CSS PROFISSIONAIS
+# ESTILOS CSS
 # -------------------------------------------------------------
 st.markdown(
     """
     <style>
-    /* Fundo geral e tipografia */
     .stApp {
         background-color: #0b0e14;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
 
-    /* Cartões e Contentores */
-    .metric-card {
-        background: #161b22;
-        border: 1px solid #21262d;
-        border-radius: 12px;
-        padding: 16px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    }
-    
     .info-box {
         background-color: #11161d;
         border: 1px solid #1f242c;
@@ -311,7 +329,6 @@ st.markdown(
         color: #f3f4f6;
     }
 
-    /* Badges de Estado */
     .badge-ativa {
         background-color: rgba(16, 185, 129, 0.15);
         color: #10b981;
@@ -320,7 +337,6 @@ st.markdown(
         border-radius: 20px;
         font-size: 11px;
         font-weight: 600;
-        letter-spacing: 0.5px;
     }
     .badge-fechada {
         background-color: rgba(239, 68, 68, 0.15);
@@ -330,17 +346,13 @@ st.markdown(
         border-radius: 20px;
         font-size: 11px;
         font-weight: 600;
-        letter-spacing: 0.5px;
     }
 
-    /* Estilização de Botões */
     .stButton > button {
         border-radius: 8px !important;
         font-weight: 500 !important;
-        transition: all 0.2s ease-in-out !important;
     }
 
-    /* Ajuste de Espaçamento dos Sliders */
     div[data-baseweb="slider"] {
         padding-top: 10px !important;
         padding-bottom: 10px !important;
@@ -374,7 +386,53 @@ DEX_OPTIONS = [
 ]
 
 
-# Modal para editar pool geral
+# MODAL PARA ADICIONAR APORTE
+@st.dialog("➕ Registar Novo Aporte")
+def modal_adicionar_aporte(pool_id):
+  pool = next((p for p in pools_data if p["id"] == pool_id), None)
+  if pool is not None:
+    st.write(
+        f"Registar um novo aporte de liquidez para a pool **{pool['par']}**."
+    )
+
+    with st.form(key=f"form_aporte_{pool_id}"):
+      v_aporte = st.number_input(
+          "Valor do Aporte ($ USD):", min_value=0.01, value=100.0, step=10.0
+      )
+      dt_aporte = st.date_input("Data do Aporte:", datetime.date.today())
+
+      sub = st.form_submit_button(
+          "Confirmar e Incrementar Liquidez",
+          type="primary",
+          use_container_width=True,
+      )
+      if sub:
+        registrar_aporte_db(pool_id, v_aporte, dt_aporte)
+        st.success(
+            f"Aporte de ${v_aporte:,.2f} adicionado à liquidez da pool!"
+        )
+        st.rerun()
+
+
+# MODAL PARA VISUALIZAR HISTÓRICO DE APORTES
+@st.dialog("📋 Histórico de Aportes")
+def modal_historico_aportes(pool_id):
+  pool = next((p for p in pools_data if p["id"] == pool_id), None)
+  if pool is not None:
+    st.write(f"Histórico de aportes da pool **{pool['par']}**:")
+    historico = get_historico_aportes(pool_id)
+
+    if not historico:
+      st.info("Ainda não existem aportes registados nesta pool.")
+    else:
+      df_aportes = pd.DataFrame(historico, columns=["Data Aporte", "Valor ($)"])
+      df_aportes["Valor ($)"] = df_aportes["Valor ($)"].map(
+          lambda x: f"${x:,.2f}"
+      )
+      st.dataframe(df_aportes, use_container_width=True, hide_index=True)
+
+
+# MODAL PARA EDITAR POOL
 @st.dialog("⚙️ Editar Parâmetros da Pool")
 def modal_atualizar_pool(pool_id):
   pool = next((p for p in pools_data if p["id"] == pool_id), None)
@@ -396,10 +454,10 @@ def modal_atualizar_pool(pool_id):
       novo_valor_atual = st.number_input(
           "Valor Atual ($ USD)", min_value=0.0, value=val_default, step=10.0
       )
-      novas_fees_pendentes = st.number_input(
-          "Fees Pendentes ($ USD)",
+      novas_fees = st.number_input(
+          "Total Fees ($ USD)",
           min_value=0.0,
-          value=float(pool["fees_nao_coletadas"]),
+          value=float(pool["fees"]),
           step=0.5,
       )
       end_carteira = st.text_input(
@@ -440,7 +498,7 @@ def modal_atualizar_pool(pool_id):
         update_pool_db(
             pool_id,
             valor_final,
-            novas_fees_pendentes,
+            novas_fees,
             nova_data_entrada,
             end_carteira,
             r_min=novo_r_min,
@@ -450,7 +508,7 @@ def modal_atualizar_pool(pool_id):
         st.rerun()
 
 
-# Painel Lateral
+# PAINEL LATERAL
 with st.sidebar:
   st.header("➕ Nova Pool")
 
@@ -462,14 +520,8 @@ with st.sidebar:
     v_atual = st.number_input(
         "Valor Atual ($)", min_value=0.0, key="form_v_atual"
     )
-    f_sacadas = st.number_input(
-        "Fees Sacadas ($)", min_value=0.0, key="form_f_sacadas"
-    )
-    f_reinvestidas = st.number_input(
-        "Fees Reinvestidas ($)", min_value=0.0, key="form_f_reinvestidas"
-    )
-    fees_pendentes = st.number_input(
-        "Fees Pendentes ($)", min_value=0.0, key="form_fees_pendentes"
+    fees_in = st.number_input(
+        "Fees Pendentes ($)", min_value=0.0, key="form_fees"
     )
     wallet_addr = st.text_input(
         "Position Mint Address (NFT)", key="form_wallet_addr"
@@ -496,9 +548,7 @@ with st.sidebar:
           nome_rede,
           float(v_init),
           float(v_actual_calc),
-          float(f_sacadas),
-          float(f_reinvestidas),
-          float(fees_pendentes),
+          float(fees_in),
           float(r_min),
           float(r_max),
           data_in,
@@ -515,9 +565,7 @@ with st.sidebar:
 
 # CÁLCULOS DO RESUMO GERAL
 total_liquidez = sum(p["valor_atual"] for p in pools_data)
-total_fees_geradas = sum(
-    p["fees_sacadas"] + p["fees_reinvestidas"] for p in pools_data
-)
+total_fees = sum(p["fees"] for p in pools_data)
 
 aprs_com_peso = []
 pesos_iniciais = []
@@ -532,11 +580,7 @@ for p in pools_data:
   if dias <= 0:
     dias = 1
 
-  total_fees_pool = (
-      p.get("fees_sacadas", 0.0)
-      + p.get("fees_reinvestidas", 0.0)
-      + p.get("fees_nao_coletadas", 0.0)
-  )
+  total_fees_pool = p.get("fees", 0.0)
   v_init = p.get("valor_inicial", 0.0)
 
   if v_init > 0:
@@ -556,9 +600,9 @@ c1, c2, c3, c4 = st.columns(4)
 with c1:
   st.metric("Total Em Liquidez", f"${total_liquidez:,.2f}")
 with c2:
-  st.metric("Total Fees Coletadas", f"${total_fees_geradas:,.2f}")
+  st.metric("Total Fees Acumuladas", f"${total_fees:,.2f}")
 with c3:
-  st.metric("APR Médio do Portfólio", f"{media_apr_fees:.2f}%")
+  st.metric("APR Médio das Fees", f"{media_apr_fees:.2f}%")
 with c4:
   label_btn = (
       "👁️ Expandir Detalhes"
@@ -577,10 +621,6 @@ else:
   if st.session_state.ocultar_detalhes:
     resumo_list = []
     for idx, p in enumerate(pools_data, start=1):
-      f_sac = p.get("fees_sacadas", 0.0)
-      f_reinv = p.get("fees_reinvestidas", 0.0)
-      f_pend = p.get("fees_nao_coletadas", 0.0)
-
       resumo_list.append({
           "#": idx,
           "Par": p["par"],
@@ -588,8 +628,7 @@ else:
           "Estado": p["estado"],
           "Valor Inicial": f"${p['valor_inicial']:,.2f}",
           "Valor Atual": f"${p['valor_atual']:,.2f}",
-          "Fees Geradas": f"${f_sac + f_reinv:,.2f}",
-          "Fees Pendentes": f"${f_pend:,.2f}",
+          "Fees": f"${p['fees']:,.2f}",
           "Range Mín": f"{p['range_min']:.6f}",
           "Range Máx": f"{p['range_max']:.6f}",
           "NFT Position": p.get("wallet_address", "-"),
@@ -611,12 +650,8 @@ else:
       if dias_totais <= 0:
         dias_totais = 1
 
-      total_fees_geradas_pool = (
-          pool["fees_sacadas"]
-          + pool["fees_reinvestidas"]
-          + pool["fees_nao_coletadas"]
-      )
-      pnl = (pool["valor_atual"] + pool["fees_sacadas"]) - pool["valor_inicial"]
+      total_fees_geradas_pool = pool["fees"]
+      pnl = (pool["valor_atual"] + pool["fees"]) - pool["valor_inicial"]
       variacao_pct = (
           (
               (pool["valor_atual"] - pool["valor_inicial"])
@@ -663,7 +698,7 @@ else:
               delta_color="normal" if pnl >= 0 else "inverse",
           )
           m4.metric("APR Total", f"{apr_total:.2f}%")
-          m5.metric("Fees Pendentes", f"${pool['fees_nao_coletadas']:,.2f}")
+          m5.metric("Fees", f"${pool['fees']:,.2f}")
 
         # BLOCO INFORMATIVO COMPACTO
         col_i1, col_i2, col_i3, col_i4 = st.columns(4)
@@ -678,9 +713,8 @@ else:
             unsafe_allow_html=True,
         )
         col_i3.markdown(
-            f"<div class='info-box'>💰 <strong>Fees (Sacadas / Reinv):</strong>"
-            f" ${pool['fees_sacadas']:,.2f} /"
-            f" ${pool['fees_reinvestidas']:,.2f}</div>",
+            f"<div class='info-box'>🪙 <strong>Fees Totais:</strong>"
+            f" ${pool['fees']:,.2f}</div>",
             unsafe_allow_html=True,
         )
         col_i4.markdown(
@@ -691,7 +725,7 @@ else:
 
         st.write(" ")
 
-        # AÇÕES DA POOL
+        # AÇÕES DA POOL (NOVO BOTÃO DE APORTE E HISTÓRICO)
         col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
 
         if col_b1.button(
@@ -715,41 +749,16 @@ else:
                 st.info("Consulta efetuada.")
 
         if col_b3.button(
-            "🔄 Reinvestir",
-            key=f"reinvest_{pool['id']}",
-            use_container_width=True,
+            "➕ Aporte", key=f"aporte_{pool['id']}", use_container_width=True
         ):
-          if pool["fees_nao_coletadas"] > 0:
-            fees_temp = pool["fees_nao_coletadas"]
-            novo_v_atual = pool["valor_atual"] + fees_temp
-            novas_reinv = pool["fees_reinvestidas"] + fees_temp
-            update_pool_fees_db(
-                pool["id"],
-                novo_v_atual,
-                pool["fees_sacadas"],
-                novas_reinv,
-                0.0,
-            )
-            st.success("Fees reinvestidas!")
-            st.rerun()
+          modal_adicionar_aporte(pool["id"])
 
         if col_b4.button(
-            "💸 Sacar Fees",
-            key=f"withdraw_{pool['id']}",
+            "📋 Histórico Aportes",
+            key=f"hist_{pool['id']}",
             use_container_width=True,
         ):
-          if pool["fees_nao_coletadas"] > 0:
-            fees_temp = pool["fees_nao_coletadas"]
-            novas_sacadas = pool["fees_sacadas"] + fees_temp
-            update_pool_fees_db(
-                pool["id"],
-                pool["valor_atual"],
-                novas_sacadas,
-                pool["fees_reinvestidas"],
-                0.0,
-            )
-            st.success("Fees sacadas!")
-            st.rerun()
+          modal_historico_aportes(pool["id"])
 
         with col_b5:
           with st.popover("⚙️ Mais Opções", use_container_width=True):
