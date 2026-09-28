@@ -360,63 +360,61 @@ def modal_sincronizar_carteira(pool_id, price_usd=None, price_native=None):
                 st.success("Dados atualizados com sucesso!")
                 st.rerun()
 
-# MODAL PARA ADICIONAR APORTE
-@st.dialog("➕ Registar Novo Aporte")
-def modal_adicionar_aporte(pool_id):
+# MODAL INTEGRADO DE APORTES (NOVO + HISTÓRICO)
+@st.dialog("➕ Gestão de Aportes")
+def modal_gerir_aportes(pool_id):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
     if pool is not None:
-        st.write(f"Registar um novo aporte de liquidez para a pool **{pool['par']}**.")
-        with st.form(key=f"form_aporte_{pool_id}"):
-            v_aporte = st.number_input("Valor do Aporte ($ USD):", min_value=0.01, value=100.0, step=10.0)
-            dt_aporte = st.date_input("Data do Aporte:", datetime.date.today())
-            sub = st.form_submit_button("Confirmar e Incrementar Liquidez", type="primary", use_container_width=True)
-            if sub:
-                registrar_aporte_db(pool_id, v_aporte, dt_aporte)
-                st.success(f"Aporte de ${v_aporte:,.2f} adicionado à liquidez da pool!")
-                st.rerun()
+        tab_novo, tab_hist = st.tabs(["➕ Novo Aporte", "📋 Histórico de Aportes"])
+        
+        with tab_novo:
+            st.write(f"Registar um novo aporte de liquidez para a pool **{pool['par']}**:")
+            with st.form(key=f"form_aporte_{pool_id}"):
+                v_aporte = st.number_input("Valor do Aporte ($ USD):", min_value=0.01, value=100.0, step=10.0)
+                dt_aporte = st.date_input("Data do Aporte:", datetime.date.today())
+                sub = st.form_submit_button("Confirmar e Incrementar Liquidez", type="primary", use_container_width=True)
+                if sub:
+                    registrar_aporte_db(pool_id, v_aporte, dt_aporte)
+                    st.success(f"Aporte de ${v_aporte:,.2f} adicionado à liquidez da pool!")
+                    st.rerun()
 
-# MODAL PARA VISUALIZAR HISTÓRICO DE APORTES
-@st.dialog("📋 Histórico de Aportes")
-def modal_historico_aportes(pool_id):
-    pool = next((p for p in pools_data if p["id"] == pool_id), None)
-    if pool is not None:
-        st.write(f"Histórico de aportes da pool **{pool['par']}**:")
-        historico = get_historico_aportes(pool_id)
-        if not historico:
-            st.info("Ainda não existem aportes registados nesta pool.")
-        else:
-            df_aportes = pd.DataFrame(historico, columns=["Data Aporte", "Valor ($)"])
-            df_aportes["Valor ($)"] = df_aportes["Valor ($)"].map(lambda x: f"${x:,.2f}")
-            st.dataframe(df_aportes, use_container_width=True, hide_index=True)
+        with tab_hist:
+            st.write(f"Histórico de aportes da pool **{pool['par']}**:")
+            historico = get_historico_aportes(pool_id)
+            if not historico:
+                st.info("Ainda não existem aportes registados nesta pool.")
+            else:
+                df_aportes = pd.DataFrame(historico, columns=["Data Aporte", "Valor ($)"])
+                df_aportes["Valor ($)"] = df_aportes["Valor ($)"].map(lambda x: f"${x:,.2f}")
+                st.dataframe(df_aportes, use_container_width=True, hide_index=True)
 
-# MODAL PARA SAQUE DE FEES
-@st.dialog("💸 Registar Saque de Fees")
-def modal_sacar_fees(pool_id):
+# MODAL INTEGRADO DE SAQUES DE FEES (NOVO + HISTÓRICO)
+@st.dialog("💸 Gestão de Saques de Fees")
+def modal_gerir_saques(pool_id):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
     if pool is not None:
-        st.write(f"Registar saque de fees para a pool **{pool['par']}** (Fees Acumuladas: **${pool['fees']:,.2f}**):")
-        with st.form(key=f"form_saque_{pool_id}"):
-            v_saque = st.number_input("Valor do Saque ($ USD):", min_value=0.01, max_value=max(0.01, float(pool["fees"])), value=min(10.0, float(pool["fees"])), step=1.0)
-            dt_saque = st.date_input("Data do Saque:", datetime.date.today())
-            sub = st.form_submit_button("Confirmar Saque de Fees", type="primary", use_container_width=True)
-            if sub:
-                registrar_saque_db(pool_id, v_saque, dt_saque)
-                st.success(f"Saque de ${v_saque:,.2f} registado com sucesso!")
-                st.rerun()
+        tab_novo, tab_hist = st.tabs(["💸 Novo Saque", "📜 Histórico de Saques"])
 
-# MODAL PARA VISUALIZAR HISTÓRICO DE SAQUES
-@st.dialog("📜 Histórico de Saques")
-def modal_historico_saques(pool_id):
-    pool = next((p for p in pools_data if p["id"] == pool_id), None)
-    if pool is not None:
-        st.write(f"Histórico de saques de fees da pool **{pool['par']}**:")
-        historico = get_historico_saques(pool_id)
-        if not historico:
-            st.info("Ainda não existem saques registados nesta pool.")
-        else:
-            df_saques = pd.DataFrame(historico, columns=["Data Saque", "Valor ($)"])
-            df_saques["Valor ($)"] = df_saques["Valor ($)"].map(lambda x: f"${x:,.2f}")
-            st.dataframe(df_saques, use_container_width=True, hide_index=True)
+        with tab_novo:
+            st.write(f"Registar saque de fees para a pool **{pool['par']}** (Fees Acumuladas: **${pool['fees']:,.2f}**):")
+            with st.form(key=f"form_saque_{pool_id}"):
+                v_saque = st.number_input("Valor do Saque ($ USD):", min_value=0.01, max_value=max(0.01, float(pool["fees"])), value=min(10.0, float(pool["fees"])), step=1.0)
+                dt_saque = st.date_input("Data do Saque:", datetime.date.today())
+                sub = st.form_submit_button("Confirmar Saque de Fees", type="primary", use_container_width=True)
+                if sub:
+                    registrar_saque_db(pool_id, v_saque, dt_saque)
+                    st.success(f"Saque de ${v_saque:,.2f} registado com sucesso!")
+                    st.rerun()
+
+        with tab_hist:
+            st.write(f"Histórico de saques de fees da pool **{pool['par']}**:")
+            historico = get_historico_saques(pool_id)
+            if not historico:
+                st.info("Ainda não existem saques registados nesta pool.")
+            else:
+                df_saques = pd.DataFrame(historico, columns=["Data Saque", "Valor ($)"])
+                df_saques["Valor ($)"] = df_saques["Valor ($)"].map(lambda x: f"${x:,.2f}")
+                st.dataframe(df_saques, use_container_width=True, hide_index=True)
 
 # MODAL PARA EDITAR POOL
 @st.dialog("⚙️ Editar Parâmetros da Pool")
@@ -588,8 +586,8 @@ else:
 
                 st.write(" ")
 
-                # BOTÕES DE AÇÃO REORGANIZADOS
-                col_b1, col_b2, col_b3, col_b4, col_b5, col_b6 = st.columns(6)
+                # BOTÕES DE AÇÃO LIMPOS E UNIFICADOS
+                col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
 
                 if col_b1.button("✏️ Editar", key=f"edit_{pool['id']}", use_container_width=True):
                     modal_atualizar_pool(pool["id"])
@@ -601,19 +599,13 @@ else:
                         modal_sincronizar_carteira(pool["id"], price_usd=p_usd, price_native=p_nat)
 
                 if col_b3.button("➕ Aporte", key=f"aporte_{pool['id']}", use_container_width=True):
-                    modal_adicionar_aporte(pool["id"])
+                    modal_gerir_aportes(pool["id"])
 
                 if col_b4.button("💸 Sacar Fees", key=f"sacar_{pool['id']}", use_container_width=True):
-                    modal_sacar_fees(pool["id"])
+                    modal_gerir_saques(pool["id"])
 
-                if col_b5.button("📋 Histórico", key=f"hist_{pool['id']}", use_container_width=True):
-                    modal_historico_aportes(pool["id"])
-
-                with col_b6:
-                    with st.popover("⚙️ Mais", use_container_width=True):
-                        if st.button("📜 Histórico Saques", key=f"hist_saques_{pool['id']}", use_container_width=True):
-                            modal_historico_saques(pool["id"])
-
+                with col_b5:
+                    with st.popover("⚙️ Mais Opções", use_container_width=True):
                         if st.button("🔒 Fechar/Ativar Pool", key=f"close_{pool['id']}", use_container_width=True):
                             novo_st = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
                             update_pool_status_db(pool["id"], novo_st)
