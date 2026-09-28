@@ -64,7 +64,7 @@ def init_db():
         )
     ''')
 
-    # Garantir existência de colunas
+    # Garantir colunas essenciais
     c.execute("PRAGMA table_info(pools)")
     existing_cols = [col[1] for col in c.fetchall()]
 
@@ -178,6 +178,9 @@ def update_pool_db(pool_id, valor_atual, fees, data_entrada, wallet_addr="", r_m
     conn.commit()
     conn.close()
 
+# -------------------------------------------------------------
+# FUNÇÕES DE GESTÃO DE APORTES (CRUD)
+# -------------------------------------------------------------
 def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -197,7 +200,7 @@ def get_historico_aportes(pool_id):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''
-        SELECT data_aporte, valor FROM aportes 
+        SELECT id, data_aporte, valor FROM aportes 
         WHERE pool_id = ? 
         ORDER BY data_aporte DESC, id DESC
     ''', (pool_id,))
@@ -205,6 +208,38 @@ def get_historico_aportes(pool_id):
     conn.close()
     return rows
 
+def update_aporte_db(aporte_id, pool_id, novo_valor, nova_data, valor_antigo):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    diferenca = novo_valor - valor_antigo
+    c.execute('''
+        UPDATE aportes 
+        SET valor = ?, data_aporte = ?
+        WHERE id = ?
+    ''', (novo_valor, nova_data.strftime("%Y-%m-%d"), aporte_id))
+    c.execute('''
+        UPDATE pools 
+        SET valor_atual = valor_atual + ?, valor_inicial = valor_inicial + ?
+        WHERE id = ?
+    ''', (diferenca, diferenca, pool_id))
+    conn.commit()
+    conn.close()
+
+def delete_aporte_db(aporte_id, pool_id, valor_aporte):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM aportes WHERE id = ?", (aporte_id,))
+    c.execute('''
+        UPDATE pools 
+        SET valor_atual = MAX(0, valor_atual - ?), valor_inicial = MAX(0, valor_inicial - ?)
+        WHERE id = ?
+    ''', (valor_aporte, valor_aporte, pool_id))
+    conn.commit()
+    conn.close()
+
+# -------------------------------------------------------------
+# FUNÇÕES DE GESTÃO DE SAQUES (CRUD)
+# -------------------------------------------------------------
 def registrar_saque_db(pool_id, valor_saque, data_saque):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -224,7 +259,7 @@ def get_historico_saques(pool_id):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''
-        SELECT data_saque, valor FROM saques 
+        SELECT id, data_saque, valor FROM saques 
         WHERE pool_id = ? 
         ORDER BY data_saque DESC, id DESC
     ''', (pool_id,))
@@ -232,6 +267,38 @@ def get_historico_saques(pool_id):
     conn.close()
     return rows
 
+def update_saque_db(saque_id, pool_id, novo_valor, nova_data, valor_antigo):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    diferenca = novo_valor - valor_antigo
+    c.execute('''
+        UPDATE saques 
+        SET valor = ?, data_saque = ?
+        WHERE id = ?
+    ''', (novo_valor, nova_data.strftime("%Y-%m-%d"), saque_id))
+    c.execute('''
+        UPDATE pools 
+        SET fees = MAX(0, fees - ?)
+        WHERE id = ?
+    ''', (diferenca, pool_id))
+    conn.commit()
+    conn.close()
+
+def delete_saque_db(saque_id, pool_id, valor_saque):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM saques WHERE id = ?", (saque_id,))
+    c.execute('''
+        UPDATE pools 
+        SET fees = fees + ?
+        WHERE id = ?
+    ''', (valor_saque, pool_id))
+    conn.commit()
+    conn.close()
+
+# -------------------------------------------------------------
+# OUTRAS OPERAÇÕES DE BANCO
+# -------------------------------------------------------------
 def update_pool_status_db(pool_id, novo_estado):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -360,7 +427,7 @@ def modal_sincronizar_carteira(pool_id, price_usd=None, price_native=None):
                 st.success("Dados atualizados com sucesso!")
                 st.rerun()
 
-# MODAL INTEGRADO DE APORTES (NOVO + HISTÓRICO)
+# MODAL INTEGRADO DE APORTES (NOVO + HISTÓRICO COM EDIT/DELETE)
 @st.dialog("➕ Gestão de Aportes")
 def modal_gerir_aportes(pool_id):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
@@ -375,7 +442,7 @@ def modal_gerir_aportes(pool_id):
                 sub = st.form_submit_button("Confirmar e Incrementar Liquidez", type="primary", use_container_width=True)
                 if sub:
                     registrar_aporte_db(pool_id, v_aporte, dt_aporte)
-                    st.success(f"Aporte de ${v_aporte:,.2f} adicionado à liquidez da pool!")
+                    st.success(f"Aporte de ${v_aporte:,.2f} adicionado à liquidez!")
                     st.rerun()
 
         with tab_hist:
@@ -384,11 +451,37 @@ def modal_gerir_aportes(pool_id):
             if not historico:
                 st.info("Ainda não existem aportes registados nesta pool.")
             else:
-                df_aportes = pd.DataFrame(historico, columns=["Data Aporte", "Valor ($)"])
-                df_aportes["Valor ($)"] = df_aportes["Valor ($)"].map(lambda x: f"${x:,.2f}")
-                st.dataframe(df_aportes, use_container_width=True, hide_index=True)
+                for apt_id, dt_str, val in historico:
+                    c_dt, c_val, c_edit, c_del = st.columns([2, 2, 1, 1])
+                    c_dt.write(f"📅 {dt_str}")
+                    c_val.write(f"💵 **${val:,.2f}**")
+                    
+                    edit_key = f"edit_apt_btn_{apt_id}"
+                    if c_edit.button("✏️", key=edit_key, help="Editar Aporte"):
+                        st.session_state[f"active_edit_apt_{apt_id}"] = not st.session_state.get(f"active_edit_apt_{apt_id}", False)
 
-# MODAL INTEGRADO DE SAQUES DE FEES (NOVO + HISTÓRICO)
+                    if c_del.button("🗑️", key=f"del_apt_{apt_id}", help="Eliminar Aporte"):
+                        delete_aporte_db(apt_id, pool_id, val)
+                        st.success("Aporte eliminado com sucesso!")
+                        st.rerun()
+
+                    if st.session_state.get(f"active_edit_apt_{apt_id}", False):
+                        try:
+                            d_orig = datetime.datetime.strptime(dt_str, "%Y-%m-%d").date()
+                        except Exception:
+                            d_orig = datetime.date.today()
+
+                        with st.form(key=f"form_edit_apt_{apt_id}"):
+                            n_val = st.number_input("Novo Valor ($ USD):", min_value=0.01, value=float(val), step=10.0)
+                            n_dt = st.date_input("Nova Data:", value=d_orig)
+                            btn_up = st.form_submit_button("Guardar Alterações")
+                            if btn_up:
+                                update_aporte_db(apt_id, pool_id, n_val, n_dt, val)
+                                st.session_state[f"active_edit_apt_{apt_id}"] = False
+                                st.success("Aporte atualizado!")
+                                st.rerun()
+
+# MODAL INTEGRADO DE SAQUES DE FEES (NOVO + HISTÓRICO COM EDIT/DELETE)
 @st.dialog("💸 Gestão de Saques de Fees")
 def modal_gerir_saques(pool_id):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
@@ -398,7 +491,7 @@ def modal_gerir_saques(pool_id):
         with tab_novo:
             st.write(f"Registar saque de fees para a pool **{pool['par']}** (Fees Acumuladas: **${pool['fees']:,.2f}**):")
             with st.form(key=f"form_saque_{pool_id}"):
-                v_saque = st.number_input("Valor do Saque ($ USD):", min_value=0.01, max_value=max(0.01, float(pool["fees"])), value=min(10.0, float(pool["fees"])), step=1.0)
+                v_saque = st.number_input("Valor do Saque ($ USD):", min_value=0.01, value=min(10.0, float(pool["fees"]) if pool["fees"] > 0 else 10.0), step=1.0)
                 dt_saque = st.date_input("Data do Saque:", datetime.date.today())
                 sub = st.form_submit_button("Confirmar Saque de Fees", type="primary", use_container_width=True)
                 if sub:
@@ -412,9 +505,35 @@ def modal_gerir_saques(pool_id):
             if not historico:
                 st.info("Ainda não existem saques registados nesta pool.")
             else:
-                df_saques = pd.DataFrame(historico, columns=["Data Saque", "Valor ($)"])
-                df_saques["Valor ($)"] = df_saques["Valor ($)"].map(lambda x: f"${x:,.2f}")
-                st.dataframe(df_saques, use_container_width=True, hide_index=True)
+                for sq_id, dt_str, val in historico:
+                    c_dt, c_val, c_edit, c_del = st.columns([2, 2, 1, 1])
+                    c_dt.write(f"📅 {dt_str}")
+                    c_val.write(f"💸 **${val:,.2f}**")
+                    
+                    edit_key = f"edit_sq_btn_{sq_id}"
+                    if c_edit.button("✏️", key=edit_key, help="Editar Saque"):
+                        st.session_state[f"active_edit_sq_{sq_id}"] = not st.session_state.get(f"active_edit_sq_{sq_id}", False)
+
+                    if c_del.button("🗑️", key=f"del_sq_{sq_id}", help="Eliminar Saque"):
+                        delete_saque_db(sq_id, pool_id, val)
+                        st.success("Saque eliminado e valor devolvido às fees!")
+                        st.rerun()
+
+                    if st.session_state.get(f"active_edit_sq_{sq_id}", False):
+                        try:
+                            d_orig = datetime.datetime.strptime(dt_str, "%Y-%m-%d").date()
+                        except Exception:
+                            d_orig = datetime.date.today()
+
+                        with st.form(key=f"form_edit_sq_{sq_id}"):
+                            n_val = st.number_input("Novo Valor ($ USD):", min_value=0.01, value=float(val), step=1.0)
+                            n_dt = st.date_input("Nova Data:", value=d_orig)
+                            btn_up = st.form_submit_button("Guardar Alterações")
+                            if btn_up:
+                                update_saque_db(sq_id, pool_id, n_val, n_dt, val)
+                                st.session_state[f"active_edit_sq_{sq_id}"] = False
+                                st.success("Saque atualizado!")
+                                st.rerun()
 
 # MODAL PARA EDITAR POOL
 @st.dialog("⚙️ Editar Parâmetros da Pool")
