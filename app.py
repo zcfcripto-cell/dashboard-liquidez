@@ -238,7 +238,7 @@ def delete_aporte_db(aporte_id, pool_id, valor_aporte):
     conn.close()
 
 # -------------------------------------------------------------
-# FUNÇÕES DE GESTÃO DE SAQUES (OPÇÃO 2: HISTÓRICO ACUMULADO)
+# FUNÇÕES DE GESTÃO DE SAQUES (SOMA AUTOMÁTICA ÀS FEES TOTAIS)
 # -------------------------------------------------------------
 def registrar_saque_db(pool_id, valor_saque, data_saque):
     conn = sqlite3.connect(DB_FILE)
@@ -247,6 +247,11 @@ def registrar_saque_db(pool_id, valor_saque, data_saque):
         INSERT INTO saques (pool_id, valor, data_saque)
         VALUES (?, ?, ?)
     ''', (pool_id, valor_saque, data_saque.strftime("%Y-%m-%d")))
+    c.execute('''
+        UPDATE pools 
+        SET fees = fees + ?
+        WHERE id = ?
+    ''', (valor_saque, pool_id))
     conn.commit()
     conn.close()
 
@@ -265,11 +270,17 @@ def get_historico_saques(pool_id):
 def update_saque_db(saque_id, pool_id, novo_valor, nova_data, valor_antigo):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    diferenca = novo_valor - valor_antigo
     c.execute('''
         UPDATE saques 
         SET valor = ?, data_saque = ?
         WHERE id = ?
     ''', (novo_valor, nova_data.strftime("%Y-%m-%d"), saque_id))
+    c.execute('''
+        UPDATE pools 
+        SET fees = MAX(0, fees + ?)
+        WHERE id = ?
+    ''', (diferenca, pool_id))
     conn.commit()
     conn.close()
 
@@ -277,6 +288,11 @@ def delete_saque_db(saque_id, pool_id, valor_saque):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("DELETE FROM saques WHERE id = ?", (saque_id,))
+    c.execute('''
+        UPDATE pools 
+        SET fees = MAX(0, fees - ?)
+        WHERE id = ?
+    ''', (valor_saque, pool_id))
     conn.commit()
     conn.close()
 
@@ -480,7 +496,7 @@ def modal_gerir_saques(pool_id):
                 sub = st.form_submit_button("Confirmar Saque de Fees", type="primary", use_container_width=True)
                 if sub:
                     registrar_saque_db(pool_id, v_saque, dt_saque)
-                    st.success(f"Saque de ${v_saque:,.2f} registado com sucesso no histórico!")
+                    st.success(f"Saque de ${v_saque:,.2f} registado com sucesso e somado às fees totais!")
                     st.rerun()
 
         with tab_hist:
@@ -500,7 +516,7 @@ def modal_gerir_saques(pool_id):
 
                     if c_del.button("🗑️", key=f"del_sq_{sq_id}", help="Eliminar Saque"):
                         delete_saque_db(sq_id, pool_id, val)
-                        st.success("Saque eliminado!")
+                        st.success("Saque eliminado e valor subtraído das fees!")
                         st.rerun()
 
                     if st.session_state.get(f"active_edit_sq_{sq_id}", False):
