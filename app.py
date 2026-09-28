@@ -15,12 +15,16 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
-# CONSULTA DE PREÇOS NO DEXSCREENER
+# CONSULTA DE PREÇOS NO DEXSCREENER (COM TRATAMENTO DE NULOS)
 # -------------------------------------------------------------
-def fetch_dexscreener_price(position_nft_address: str):
-    if not position_nft_address:
+def fetch_dexscreener_price(position_nft_address):
+    if not position_nft_address or not isinstance(position_nft_address, str):
         return None, None
+    
     clean_addr = position_nft_address.strip()
+    if not clean_addr:
+        return None, None
+
     url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{clean_addr}"
     try:
         res = requests.get(url, timeout=6)
@@ -105,7 +109,7 @@ def load_pools():
             "range_min": float(r[7]),
             "range_max": float(r[8]),
             "data_entrada": dt_ent,
-            "wallet_address": r[10] if len(r) > 10 and r[10] else ""
+            "wallet_address": r[10] if len(r) > 10 and r[10] is not None else ""
         })
     return pools
 
@@ -265,7 +269,7 @@ DEX_OPTIONS = ["Raydium", "Uniswap v3", "Orca", "Kamino", "PancakeSwap", "Curve"
 def modal_sincronizar_carteira(pool_id, price_usd=None, price_native=None):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
     if pool is not None:
-        if price_usd:
+        if price_usd and price_native:
             st.info(f"💡 Cotação do Par no DexScreener: **${price_usd:.6f} USD** ({price_native:.6f} SOL)")
 
         val_default = float(pool["valor_atual"]) if pool["valor_atual"] > 0 else float(pool["valor_inicial"])
