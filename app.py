@@ -39,7 +39,7 @@ def fetch_dexscreener_price(position_nft_address):
     return None, None
 
 # -------------------------------------------------------------
-# BASE DE DADOS SQLITE (POOLS E APORTES) COM MIGRAÇÃO AUTOMÁTICA
+# BASE DE DADOS SQLITE COM MIGRAÇÃO AUTOMÁTICA
 # -------------------------------------------------------------
 DB_FILE = "pools_data.db"
 
@@ -47,6 +47,7 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
+    # 1. Criar a tabela se não existir com a estrutura nova
     c.execute('''
         CREATE TABLE IF NOT EXISTS pools (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +56,7 @@ def init_db():
             estado TEXT,
             valor_inicial REAL,
             valor_atual REAL,
-            fees REAL,
+            fees REAL DEFAULT 0,
             range_min REAL DEFAULT 0,
             range_max REAL DEFAULT 0,
             data_entrada TEXT,
@@ -63,9 +64,15 @@ def init_db():
         )
     ''')
 
-    # Garantir que colunas adicionadas recentemente existem em bases de dados antigas
+    # 2. Verificar colunas existentes para migração sem erros
     c.execute("PRAGMA table_info(pools)")
     existing_cols = [col[1] for col in c.fetchall()]
+
+    if "fees" not in existing_cols:
+        c.execute("ALTER TABLE pools ADD COLUMN fees REAL DEFAULT 0")
+        # Se existiam colunas antigas de fees, migrar o total
+        if "fees_nao_coletadas" in existing_cols:
+            c.execute("UPDATE pools SET fees = COALESCE(fees_sacadas, 0) + COALESCE(fees_reinvestidas, 0) + COALESCE(fees_nao_coletadas, 0)")
 
     if "range_min" not in existing_cols:
         c.execute("ALTER TABLE pools ADD COLUMN range_min REAL DEFAULT 0")
@@ -74,6 +81,7 @@ def init_db():
     if "wallet_address" not in existing_cols:
         c.execute("ALTER TABLE pools ADD COLUMN wallet_address TEXT DEFAULT ''")
 
+    # 3. Tabela de Aportes
     c.execute('''
         CREATE TABLE IF NOT EXISTS aportes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,41 +94,50 @@ def init_db():
 
     conn.commit()
 
+    # Inicializar dados padrão se a tabela estiver completamente vazia
     c.execute("SELECT COUNT(*) FROM pools")
     if c.fetchone()[0] == 0:
         c.execute('''
             INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees, range_min, range_max, data_entrada, wallet_address)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', ("SOL/PUMP", "Raydium - SOLANA", "Ativa", 2203.0, 2800.62, 27.21, 0.0, 25.0, "2026-08-20", ""))
+        ''', ("SOL/PUMP", "Raydium - SOLANA", "Ativa", 2203.0, 2800.62, 27.21, 19.469550, 30.933150, "2026-08-20", ""))
         conn.commit()
     conn.close()
 
 def load_pools():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, par, rede, estado, valor_inicial, valor_atual, fees, range_min, range_max, data_entrada, wallet_address FROM pools ORDER BY id ASC")
+    c.execute("SELECT * FROM pools ORDER BY id ASC")
     rows = c.fetchall()
+    c.execute("PRAGMA table_info(pools)")
+    cols = [col[1] for col in c.fetchall()]
     conn.close()
 
     pools = []
     for r in rows:
+        row_dict = dict(zip(cols, r))
+        
         try:
-            dt_ent = datetime.datetime.strptime(r[9], "%Y-%m-%d").date() if r[9] else datetime.date.today()
+            dt_ent = datetime.datetime.strptime(row_dict.get("data_entrada", ""), "%Y-%m-%d").date()
         except Exception:
             dt_ent = datetime.date.today()
 
+        fees_val = float(row_dict.get("fees", 0) or 0)
+        if fees_val == 0 and "fees_nao_coletadas" in row_dict:
+            fees_val = float(row_dict.get("fees_sacadas", 0) or 0) + float(row_dict.get("fees_reinvestidas", 0) or 0) + float(row_dict.get("fees_nao_coletadas", 0) or 0)
+
         pools.append({
-            "id": r[0],
-            "par": r[1],
-            "rede": r[2],
-            "estado": r[3],
-            "valor_inicial": float(r[4] or 0),
-            "valor_atual": float(r[5] or 0),
-            "fees": float(r[6] or 0),
-            "range_min": float(r[7] or 0),
-            "range_max": float(r[8] or 0),
+            "id": row_dict.get("id"),
+            "par": row_dict.get("par", "POOL/USD"),
+            "rede": row_dict.get("rede", "DEX"),
+            "estado": row_dict.get("estado", "Ativa"),
+            "valor_inicial": float(row_dict.get("valor_inicial", 0) or 0),
+            "valor_atual": float(row_dict.get("valor_atual", 0) or 0),
+            "fees": fees_val,
+            "range_min": float(row_dict.get("range_min", 0) or 0),
+            "range_max": float(row_dict.get("range_max", 0) or 0),
             "data_entrada": dt_ent,
-            "wallet_address": r[10] if r[10] is not None else ""
+            "wallet_address": str(row_dict.get("wallet_address", "") or "")
         })
     return pools
 
