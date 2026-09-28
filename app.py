@@ -47,7 +47,7 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    # 1. Criar a tabela se não existir com a estrutura nova
+    # 1. Tabela Principal de Pools
     c.execute('''
         CREATE TABLE IF NOT EXISTS pools (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,13 +64,12 @@ def init_db():
         )
     ''')
 
-    # 2. Verificar colunas existentes para migração sem erros
+    # Garantir existência de colunas
     c.execute("PRAGMA table_info(pools)")
     existing_cols = [col[1] for col in c.fetchall()]
 
     if "fees" not in existing_cols:
         c.execute("ALTER TABLE pools ADD COLUMN fees REAL DEFAULT 0")
-        # Se existiam colunas antigas de fees, migrar o total
         if "fees_nao_coletadas" in existing_cols:
             c.execute("UPDATE pools SET fees = COALESCE(fees_sacadas, 0) + COALESCE(fees_reinvestidas, 0) + COALESCE(fees_nao_coletadas, 0)")
 
@@ -81,7 +80,7 @@ def init_db():
     if "wallet_address" not in existing_cols:
         c.execute("ALTER TABLE pools ADD COLUMN wallet_address TEXT DEFAULT ''")
 
-    # 3. Tabela de Aportes
+    # 2. Tabela de Aportes
     c.execute('''
         CREATE TABLE IF NOT EXISTS aportes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,9 +91,19 @@ def init_db():
         )
     ''')
 
+    # 3. Tabela de Saques de Fees
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS saques (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pool_id INTEGER,
+            valor REAL,
+            data_saque TEXT,
+            FOREIGN KEY (pool_id) REFERENCES pools (id) ON DELETE CASCADE
+        )
+    ''')
+
     conn.commit()
 
-    # Inicializar dados padrão se a tabela estiver completamente vazia
     c.execute("SELECT COUNT(*) FROM pools")
     if c.fetchone()[0] == 0:
         c.execute('''
@@ -196,6 +205,33 @@ def get_historico_aportes(pool_id):
     conn.close()
     return rows
 
+def registrar_saque_db(pool_id, valor_saque, data_saque):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO saques (pool_id, valor, data_saque)
+        VALUES (?, ?, ?)
+    ''', (pool_id, valor_saque, data_saque.strftime("%Y-%m-%d")))
+    c.execute('''
+        UPDATE pools 
+        SET fees = MAX(0, fees - ?)
+        WHERE id = ?
+    ''', (valor_saque, pool_id))
+    conn.commit()
+    conn.close()
+
+def get_historico_saques(pool_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        SELECT data_saque, valor FROM saques 
+        WHERE pool_id = ? 
+        ORDER BY data_saque DESC, id DESC
+    ''', (pool_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 def update_pool_status_db(pool_id, novo_estado):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -208,6 +244,7 @@ def delete_pool_db(pool_id):
     c = conn.cursor()
     c.execute("DELETE FROM pools WHERE id = ?", (pool_id,))
     c.execute("DELETE FROM aportes WHERE pool_id = ?", (pool_id,))
+    c.execute("DELETE FROM saques WHERE pool_id = ?", (pool_id,))
     conn.commit()
     conn.close()
 
@@ -216,6 +253,7 @@ def clear_all_pools_db():
     c = conn.cursor()
     c.execute("DELETE FROM pools")
     c.execute("DELETE FROM aportes")
+    c.execute("DELETE FROM saques")
     conn.commit()
     conn.close()
 
@@ -350,6 +388,35 @@ def modal_historico_aportes(pool_id):
             df_aportes = pd.DataFrame(historico, columns=["Data Aporte", "Valor ($)"])
             df_aportes["Valor ($)"] = df_aportes["Valor ($)"].map(lambda x: f"${x:,.2f}")
             st.dataframe(df_aportes, use_container_width=True, hide_index=True)
+
+# MODAL PARA SAQUE DE FEES
+@st.dialog("💸 Registar Saque de Fees")
+def modal_sacar_fees(pool_id):
+    pool = next((p for p in pools_data if p["id"] == pool_id), None)
+    if pool is not None:
+        st.write(f"Registar saque de fees para a pool **{pool['par']}** (Fees Acumuladas: **${pool['fees']:,.2f}**):")
+        with st.form(key=f"form_saque_{pool_id}"):
+            v_saque = st.number_input("Valor do Saque ($ USD):", min_value=0.01, max_value=max(0.01, float(pool["fees"])), value=min(10.0, float(pool["fees"])), step=1.0)
+            dt_saque = st.date_input("Data do Saque:", datetime.date.today())
+            sub = st.form_submit_button("Confirmar Saque de Fees", type="primary", use_container_width=True)
+            if sub:
+                registrar_saque_db(pool_id, v_saque, dt_saque)
+                st.success(f"Saque de ${v_saque:,.2f} registado com sucesso!")
+                st.rerun()
+
+# MODAL PARA VISUALIZAR HISTÓRICO DE SAQUES
+@st.dialog("📜 Histórico de Saques")
+def modal_historico_saques(pool_id):
+    pool = next((p for p in pools_data if p["id"] == pool_id), None)
+    if pool is not None:
+        st.write(f"Histórico de saques de fees da pool **{pool['par']}**:")
+        historico = get_historico_saques(pool_id)
+        if not historico:
+            st.info("Ainda não existem saques registados nesta pool.")
+        else:
+            df_saques = pd.DataFrame(historico, columns=["Data Saque", "Valor ($)"])
+            df_saques["Valor ($)"] = df_saques["Valor ($)"].map(lambda x: f"${x:,.2f}")
+            st.dataframe(df_saques, use_container_width=True, hide_index=True)
 
 # MODAL PARA EDITAR POOL
 @st.dialog("⚙️ Editar Parâmetros da Pool")
@@ -521,7 +588,8 @@ else:
 
                 st.write(" ")
 
-                col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
+                # BOTÕES DE AÇÃO REORGANIZADOS
+                col_b1, col_b2, col_b3, col_b4, col_b5, col_b6 = st.columns(6)
 
                 if col_b1.button("✏️ Editar", key=f"edit_{pool['id']}", use_container_width=True):
                     modal_atualizar_pool(pool["id"])
@@ -535,11 +603,17 @@ else:
                 if col_b3.button("➕ Aporte", key=f"aporte_{pool['id']}", use_container_width=True):
                     modal_adicionar_aporte(pool["id"])
 
-                if col_b4.button("📋 Histórico Aportes", key=f"hist_{pool['id']}", use_container_width=True):
+                if col_b4.button("💸 Sacar Fees", key=f"sacar_{pool['id']}", use_container_width=True):
+                    modal_sacar_fees(pool["id"])
+
+                if col_b5.button("📋 Histórico", key=f"hist_{pool['id']}", use_container_width=True):
                     modal_historico_aportes(pool["id"])
 
-                with col_b5:
-                    with st.popover("⚙️ Mais Opções", use_container_width=True):
+                with col_b6:
+                    with st.popover("⚙️ Mais", use_container_width=True):
+                        if st.button("📜 Histórico Saques", key=f"hist_saques_{pool['id']}", use_container_width=True):
+                            modal_historico_saques(pool["id"])
+
                         if st.button("🔒 Fechar/Ativar Pool", key=f"close_{pool['id']}", use_container_width=True):
                             novo_st = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
                             update_pool_status_db(pool["id"], novo_st)
