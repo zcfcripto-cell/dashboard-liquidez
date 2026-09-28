@@ -39,7 +39,7 @@ def fetch_dexscreener_price(position_nft_address):
     return None, None
 
 # -------------------------------------------------------------
-# BASE DE DADOS SQLITE (POOLS E APORTES)
+# BASE DE DADOS SQLITE (POOLS E APORTES) COM MIGRAÇÃO AUTOMÁTICA
 # -------------------------------------------------------------
 DB_FILE = "pools_data.db"
 
@@ -56,12 +56,23 @@ def init_db():
             valor_inicial REAL,
             valor_atual REAL,
             fees REAL,
-            range_min REAL,
-            range_max REAL,
+            range_min REAL DEFAULT 0,
+            range_max REAL DEFAULT 0,
             data_entrada TEXT,
-            wallet_address TEXT
+            wallet_address TEXT DEFAULT ''
         )
     ''')
+
+    # Garantir que colunas adicionadas recentemente existem em bases de dados antigas
+    c.execute("PRAGMA table_info(pools)")
+    existing_cols = [col[1] for col in c.fetchall()]
+
+    if "range_min" not in existing_cols:
+        c.execute("ALTER TABLE pools ADD COLUMN range_min REAL DEFAULT 0")
+    if "range_max" not in existing_cols:
+        c.execute("ALTER TABLE pools ADD COLUMN range_max REAL DEFAULT 0")
+    if "wallet_address" not in existing_cols:
+        c.execute("ALTER TABLE pools ADD COLUMN wallet_address TEXT DEFAULT ''")
 
     c.execute('''
         CREATE TABLE IF NOT EXISTS aportes (
@@ -80,21 +91,21 @@ def init_db():
         c.execute('''
             INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees, range_min, range_max, data_entrada, wallet_address)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', ("SOL/PUMP", "Raydium - SOLANA", "Ativa", 2203.0, 2800.62, 27.21, 19.469550, 30.933150, "2026-08-20", ""))
+        ''', ("SOL/PUMP", "Raydium - SOLANA", "Ativa", 2203.0, 2800.62, 27.21, 0.0, 25.0, "2026-08-20", ""))
         conn.commit()
     conn.close()
 
 def load_pools():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT * FROM pools ORDER BY id ASC")
+    c.execute("SELECT id, par, rede, estado, valor_inicial, valor_atual, fees, range_min, range_max, data_entrada, wallet_address FROM pools ORDER BY id ASC")
     rows = c.fetchall()
     conn.close()
 
     pools = []
     for r in rows:
         try:
-            dt_ent = datetime.datetime.strptime(r[9], "%Y-%m-%d").date()
+            dt_ent = datetime.datetime.strptime(r[9], "%Y-%m-%d").date() if r[9] else datetime.date.today()
         except Exception:
             dt_ent = datetime.date.today()
 
@@ -103,13 +114,13 @@ def load_pools():
             "par": r[1],
             "rede": r[2],
             "estado": r[3],
-            "valor_inicial": float(r[4]),
-            "valor_atual": float(r[5]),
-            "fees": float(r[6]),
-            "range_min": float(r[7]),
-            "range_max": float(r[8]),
+            "valor_inicial": float(r[4] or 0),
+            "valor_atual": float(r[5] or 0),
+            "fees": float(r[6] or 0),
+            "range_min": float(r[7] or 0),
+            "range_max": float(r[8] or 0),
             "data_entrada": dt_ent,
-            "wallet_address": r[10] if len(r) > 10 and r[10] is not None else ""
+            "wallet_address": r[10] if r[10] is not None else ""
         })
     return pools
 
@@ -264,7 +275,7 @@ if "ocultar_detalhes" not in st.session_state:
 
 DEX_OPTIONS = ["Raydium", "Uniswap v3", "Orca", "Kamino", "PancakeSwap", "Curve", "Meteora", "Cetus", "Outro"]
 
-# MODAL DE SINCRONIZAÇÃO ON-CHAIN COM ATUALIZAÇÃO DIRETA
+# MODAL DE SINCRONIZAÇÃO ON-CHAIN
 @st.dialog("🔄 Sincronização On-Chain")
 def modal_sincronizar_carteira(pool_id, price_usd=None, price_native=None):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
