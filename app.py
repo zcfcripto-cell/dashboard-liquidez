@@ -9,24 +9,22 @@ import streamlit as st
 
 st.set_page_config(
     page_title="Gestor de Piscinas de Liquidez",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 # -------------------------------------------------------------
-# CONSULTA ON-CHAIN AUTOMÁTICA VIA RPC E DEXSCREENER
+# CONSULTA ON-CHAIN
 # -------------------------------------------------------------
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 
 
 def fetch_onchain_position_and_price(position_nft_address: str):
-  """Lê os dados da posição diretamente da blockchain Solana e obtém a cotação atualizada do token."""
   if not position_nft_address:
-    return None, None
+    return None, False
 
   clean_addr = position_nft_address.strip()
-
-  # 1. Obter cotação atualizada em tempo real via DexScreener
   price_usd = 0.0
   try:
     url_dex = (
@@ -40,7 +38,6 @@ def fetch_onchain_position_and_price(position_nft_address: str):
   except Exception:
     pass
 
-  # 2. Consultar o nó RPC da Solana para validar a conta da posição/NFT
   payload = {
       "jsonrpc": "2.0",
       "id": 1,
@@ -53,10 +50,9 @@ def fetch_onchain_position_and_price(position_nft_address: str):
     if res_rpc.status_code == 200:
       data_rpc = res_rpc.json()
       if "result" in data_rpc and data_rpc["result"]["value"]:
-        # Conta encontrada on-chain
         return price_usd, True
-  except Exception as e:
-    st.error(f"Erro de comunicação RPC: {e}")
+  except Exception:
+    pass
 
   return price_usd, False
 
@@ -107,10 +103,10 @@ def init_db():
             "Raydium - SOLANA",
             "Ativa",
             2203.0,
-            2583.0,
+            2815.0,
             50.0,
             0.0,
-            6.89,
+            25.00,
             19.469550,
             30.933150,
             "2026-08-20",
@@ -281,54 +277,84 @@ def clear_all_pools_db():
 
 init_db()
 
-# Estilos CSS
+# -------------------------------------------------------------
+# ESTILOS CSS PROFISSIONAIS
+# -------------------------------------------------------------
 st.markdown(
     """
     <style>
-    .badge-ativa {
-        background-color: #10b981;
-        color: white;
-        padding: 3px 8px;
+    /* Fundo geral e tipografia */
+    .stApp {
+        background-color: #0b0e14;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    /* Cartões e Contentores */
+    .metric-card {
+        background: #161b22;
+        border: 1px solid #21262d;
         border-radius: 12px;
-        font-size: 12px;
-        font-weight: bold;
+        padding: 16px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    
+    .info-box {
+        background-color: #11161d;
+        border: 1px solid #1f242c;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 13px;
+        color: #9ca3af;
+    }
+
+    .info-box strong {
+        color: #f3f4f6;
+    }
+
+    /* Badges de Estado */
+    .badge-ativa {
+        background-color: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
     }
     .badge-fechada {
-        background-color: #ef4444;
-        color: white;
-        padding: 3px 8px;
-        border-radius: 12px;
-        font-size: 12px;
-        font-weight: bold;
+        background-color: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
     }
+
+    /* Estilização de Botões */
+    .stButton > button {
+        border-radius: 8px !important;
+        font-weight: 500 !important;
+        transition: all 0.2s ease-in-out !important;
+    }
+
+    /* Ajuste de Espaçamento dos Sliders */
     div[data-baseweb="slider"] {
-        padding-top: 15px !important;
-        padding-bottom: 15px !important;
-    }
-    div[data-baseweb="slider"] > div {
-        height: 16px !important;
-        background-color: #1e3a8a !important;
-        border-radius: 8px !important;
-    }
-    div[data-baseweb="slider"] > div > div {
-        background-color: #2563eb !important;
-        height: 16px !important;
-        border-radius: 8px !important;
-    }
-    div[data-baseweb="slider"] div[role="slider"] {
-        height: 28px !important;
-        width: 28px !important;
-        background-color: #3b82f6 !important;
-        border: 3px solid #ffffff !important;
-        box-shadow: 0px 0px 8px rgba(37, 99, 235, 0.8) !important;
-        top: -6px !important;
+        padding-top: 10px !important;
+        padding-bottom: 10px !important;
     }
     </style>
 """,
     unsafe_allow_html=True,
 )
 
-st.title("📊 Gestor de Piscinas de Liquidez")
+# HEADER
+col_title, col_actions = st.columns([3, 1])
+with col_title:
+  st.title("⚡ Gestor de Piscinas de Liquidez")
+  st.caption("Acompanhamento de performance e sincronização on-chain DeFi")
 
 pools_data = load_pools()
 
@@ -338,7 +364,6 @@ if "ocultar_detalhes" not in st.session_state:
 DEX_OPTIONS = [
     "Raydium",
     "Uniswap v3",
-    "Uniswap v4",
     "Orca",
     "Kamino",
     "PancakeSwap",
@@ -350,12 +375,12 @@ DEX_OPTIONS = [
 
 
 # Modal para editar pool geral
-@st.dialog("Atualizar Pool")
+@st.dialog("⚙️ Editar Parâmetros da Pool")
 def modal_atualizar_pool(pool_id):
   pool = next((p for p in pools_data if p["id"] == pool_id), None)
 
   if pool is not None:
-    st.subheader(f"Atualizar Pool - {pool['par']}")
+    st.subheader(f"Pool: {pool['par']}")
 
     data_ori = pool.get("data_entrada", datetime.date.today())
     if isinstance(data_ori, str):
@@ -369,28 +394,28 @@ def modal_atualizar_pool(pool_id):
 
     with st.form(key=f"form_edit_modal_{pool_id}"):
       novo_valor_atual = st.number_input(
-          "Valor Atual (USD)", min_value=0.0, value=val_default, step=1.0
+          "Valor Atual ($ USD)", min_value=0.0, value=val_default, step=10.0
       )
       novas_fees_pendentes = st.number_input(
-          "Fees Acumuladas Pendentes (USD)",
+          "Fees Pendentes ($ USD)",
           min_value=0.0,
           value=float(pool["fees_nao_coletadas"]),
-          step=0.1,
+          step=0.5,
       )
       end_carteira = st.text_input(
-          "ID da Posição NFT (Position Mint Address)",
+          "Position Mint Address (NFT ID)",
           value=pool.get("wallet_address", ""),
       )
 
       col_r1, col_r2 = st.columns(2)
       novo_r_min = col_r1.number_input(
-          "Range Mín",
+          "Range Mínimo",
           value=float(pool["range_min"]),
           format="%.6f",
           step=0.000001,
       )
       novo_r_max = col_r2.number_input(
-          "Range Máx",
+          "Range Máximo",
           value=float(pool["range_max"]),
           format="%.6f",
           step=0.000001,
@@ -421,33 +446,33 @@ def modal_atualizar_pool(pool_id):
             r_min=novo_r_min,
             r_max=novo_r_max,
         )
-        st.success(f"Pool ({pool['par']}) atualizada com sucesso!")
+        st.success(f"Pool {pool['par']} atualizada!")
         st.rerun()
 
 
-# Painel Lateral - Adicionar Nova Pool
+# Painel Lateral
 with st.sidebar:
-  st.header("➕ Adicionar Nova Pool")
+  st.header("➕ Nova Pool")
 
   with st.form("nova_pool_form", clear_on_submit=True):
     par = st.text_input("Par (ex: SOL/PUMP)", key="form_par")
-    rede = st.text_input("Rede / Plataforma (ex: SOLANA)", key="form_rede")
+    rede = st.text_input("Rede / Plataforma", key="form_rede")
     dex = st.selectbox("DEX", DEX_OPTIONS, key="form_dex")
     v_init = st.number_input("Valor Inicial ($)", min_value=0.0, key="form_v_init")
     v_atual = st.number_input(
         "Valor Atual ($)", min_value=0.0, key="form_v_atual"
     )
     f_sacadas = st.number_input(
-        "Total Fees Sacadas ($)", min_value=0.0, key="form_f_sacadas"
+        "Fees Sacadas ($)", min_value=0.0, key="form_f_sacadas"
     )
     f_reinvestidas = st.number_input(
-        "Total Fees Reinvestidas ($)", min_value=0.0, key="form_f_reinvestidas"
+        "Fees Reinvestidas ($)", min_value=0.0, key="form_f_reinvestidas"
     )
     fees_pendentes = st.number_input(
         "Fees Pendentes ($)", min_value=0.0, key="form_fees_pendentes"
     )
     wallet_addr = st.text_input(
-        "ID da Posição NFT (Position Mint)", key="form_wallet_addr"
+        "Position Mint Address (NFT)", key="form_wallet_addr"
     )
     col_r1, col_r2 = st.columns(2)
     r_min = col_r1.number_input(
@@ -457,10 +482,10 @@ with st.sidebar:
         "Range Máx", key="form_r_max", format="%.6f", step=0.000001
     )
     data_in = st.date_input(
-        "Data de Entrada", datetime.date.today(), key="form_data_in"
+        "Data Entrada", datetime.date.today(), key="form_data_in"
     )
 
-    submit = st.form_submit_button("Criar Pool")
+    submit = st.form_submit_button("Adicionar Pool", type="primary")
     if submit:
       nome_par = par if par else "POOL/USD"
       nome_rede = f"{dex} - {rede if rede else 'Rede'}"
@@ -480,11 +505,11 @@ with st.sidebar:
           wallet_addr,
       )
 
-      st.success("Pool adicionada com sucesso!")
+      st.success("Pool adicionada!")
       st.rerun()
 
   st.markdown("---")
-  if st.button("🗑️ Limpar Todas as Pools"):
+  if st.button("🗑️ Limpar Portfólio"):
     clear_all_pools_db()
     st.rerun()
 
@@ -524,21 +549,21 @@ media_apr_fees = (
     sum(aprs_com_peso) / total_valor_inicial if total_valor_inicial > 0 else 0.0
 )
 
-# RESUMO GERAL
-st.markdown("### 📌 Resumo Geral do Portfólio")
-col_top1, col_top2, col_top3, col_top4 = st.columns([2, 2, 2, 2])
+# RESUMO GERAL CARTÕES
+st.markdown("### 📌 Resumo Executivo")
+c1, c2, c3, c4 = st.columns(4)
 
-with col_top1:
-  st.metric("Total Liquidez", f"${total_liquidez:,.2f}")
-with col_top2:
-  st.metric("Total Fees Geradas", f"${total_fees_geradas:,.2f}")
-with col_top3:
-  st.metric("Média do APR das Fees", f"{media_apr_fees:.2f}%")
-with col_top4:
+with c1:
+  st.metric("Total Em Liquidez", f"${total_liquidez:,.2f}")
+with c2:
+  st.metric("Total Fees Coletadas", f"${total_fees_geradas:,.2f}")
+with c3:
+  st.metric("APR Médio do Portfólio", f"{media_apr_fees:.2f}%")
+with c4:
   label_btn = (
-      "👁️ Mostrar Detalhes"
+      "👁️ Expandir Detalhes"
       if st.session_state.ocultar_detalhes
-      else "🙈 Esconder Detalhes"
+      else "🙈 Vista Compacta"
   )
   if st.button(label_btn, use_container_width=True):
     st.session_state.ocultar_detalhes = not st.session_state.ocultar_detalhes
@@ -547,9 +572,7 @@ with col_top4:
 st.markdown("---")
 
 if not pools_data:
-  st.info(
-      "Nenhuma piscina registada. Utiliza o painel lateral para adicionar."
-  )
+  st.info("Nenhuma piscina registada.")
 else:
   if st.session_state.ocultar_detalhes:
     resumo_list = []
@@ -563,13 +586,13 @@ else:
           "Par": p["par"],
           "Plataforma": p["rede"],
           "Estado": p["estado"],
-          "Valor Inicial ($)": f"${p['valor_inicial']:,.2f}",
-          "Valor Atual ($)": f"${p['valor_atual']:,.2f}",
-          "Fees Geradas ($)": f"${f_sac + f_reinv:,.2f}",
-          "Fees Pendentes ($)": f"${f_pend:,.2f}",
+          "Valor Inicial": f"${p['valor_inicial']:,.2f}",
+          "Valor Atual": f"${p['valor_atual']:,.2f}",
+          "Fees Geradas": f"${f_sac + f_reinv:,.2f}",
+          "Fees Pendentes": f"${f_pend:,.2f}",
           "Range Mín": f"{p['range_min']:.6f}",
           "Range Máx": f"{p['range_max']:.6f}",
-          "ID Posição NFT": p.get("wallet_address", "-"),
+          "NFT Position": p.get("wallet_address", "-"),
       })
     df_resumo = pd.DataFrame(resumo_list)
     st.dataframe(df_resumo, use_container_width=True, hide_index=True)
@@ -611,10 +634,11 @@ else:
           else 0
       )
 
+      # CARTÃO DA POOL
       with st.container():
-        c_head1, c_head2 = st.columns([2, 3])
+        head_col1, head_col2 = st.columns([2, 3])
 
-        with c_head1:
+        with head_col1:
           badge_class = (
               "badge-ativa" if pool["estado"] == "Ativa" else "badge-fechada"
           )
@@ -623,9 +647,9 @@ else:
               f" class='{badge_class}'>{pool['estado']}</span>",
               unsafe_allow_html=True,
           )
-          st.caption(f"Plataforma: {pool['rede']}")
+          st.caption(f"DEX / Rede: {pool['rede']}")
 
-        with c_head2:
+        with head_col2:
           m1, m2, m3, m4, m5 = st.columns(5)
           m1.metric("Valor Atual", f"${pool['valor_atual']:,.2f}")
           m2.metric(
@@ -641,43 +665,60 @@ else:
           m4.metric("APR Total", f"{apr_total:.2f}%")
           m5.metric("Fees Pendentes", f"${pool['fees_nao_coletadas']:,.2f}")
 
-        b1, b2, b3, b4 = st.columns(4)
-        b1.info(f"**Valor Inicial:** ${pool['valor_inicial']:,.2f}")
-        b2.info(f"**Dias Ativos Totais:** {dias_totais} dias")
-        b3.info(
-            f"**Fees (Sacadas / Reinvestidas):** ${pool['fees_sacadas']:,.2f} /"
-            f" ${pool['fees_reinvestidas']:,.2f}"
+        # BLOCO INFORMATIVO COMPACTO
+        col_i1, col_i2, col_i3, col_i4 = st.columns(4)
+        col_i1.markdown(
+            f"<div class='info-box'>💵 <strong>Valor Inicial:</strong>"
+            f" ${pool['valor_inicial']:,.2f}</div>",
+            unsafe_allow_html=True,
         )
-        b4.info(
-            f"**Range de Preço:** {pool['range_min']:.6f} -"
-            f" {pool['range_max']:.6f}"
+        col_i2.markdown(
+            f"<div class='info-box'>⏱️ <strong>Tempo Ativo:</strong>"
+            f" {dias_totais} dias</div>",
+            unsafe_allow_html=True,
+        )
+        col_i3.markdown(
+            f"<div class='info-box'>💰 <strong>Fees (Sacadas / Reinv):</strong>"
+            f" ${pool['fees_sacadas']:,.2f} /"
+            f" ${pool['fees_reinvestidas']:,.2f}</div>",
+            unsafe_allow_html=True,
+        )
+        col_i4.markdown(
+            f"<div class='info-box'>🎯 <strong>Range de Preço:</strong>"
+            f" {pool['range_min']:.6f} - {pool['range_max']:.6f}</div>",
+            unsafe_allow_html=True,
         )
 
-        # BOTOES DE AÇÃO
-        btn1, btn2, btn3, btn4, btn5, btn6 = st.columns(6)
+        st.write(" ")
 
-        if btn1.button(f"✏️ Editar", key=f"edit_{pool['id']}"):
+        # AÇÕES DA POOL
+        col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
+
+        if col_b1.button(
+            "✏️ Editar", key=f"edit_{pool['id']}", use_container_width=True
+        ):
           modal_atualizar_pool(pool["id"])
 
-        if btn2.button(f"🔗 Sincronizar On-Chain", key=f"sync_{pool['id']}"):
+        if col_b2.button(
+            "🔗 Sincronizar", key=f"sync_{pool['id']}", use_container_width=True
+        ):
           addr = pool.get("wallet_address", "")
           if not addr:
-            st.warning(
-                "Insere o ID do NFT da Posição clicando no botão 'Editar'."
-            )
+            st.warning("Adiciona o Position Mint Address na edição.")
           else:
-            with st.spinner("A consultar conta On-Chain..."):
+            with st.spinner("A ligar ao RPC..."):
               price_usd, success = fetch_onchain_position_and_price(addr)
               if success:
-                st.success("Sincronização On-Chain efetuada com sucesso!")
+                st.success("Verificado On-Chain!")
                 st.rerun()
               else:
-                st.info(
-                    "Conta On-Chain consultada. Clica em 'Editar' para ajustar"
-                    " valores se necessário."
-                )
+                st.info("Consulta efetuada.")
 
-        if btn3.button(f"🔄 Reinvestir", key=f"reinvest_{pool['id']}"):
+        if col_b3.button(
+            "🔄 Reinvestir",
+            key=f"reinvest_{pool['id']}",
+            use_container_width=True,
+        ):
           if pool["fees_nao_coletadas"] > 0:
             fees_temp = pool["fees_nao_coletadas"]
             novo_v_atual = pool["valor_atual"] + fees_temp
@@ -689,10 +730,14 @@ else:
                 novas_reinv,
                 0.0,
             )
-            st.success(f"${fees_temp:,.2f} reinvestidos!")
+            st.success("Fees reinvestidas!")
             st.rerun()
 
-        if btn4.button(f"💸 Sacar Fees", key=f"withdraw_{pool['id']}"):
+        if col_b4.button(
+            "💸 Sacar Fees",
+            key=f"withdraw_{pool['id']}",
+            use_container_width=True,
+        ):
           if pool["fees_nao_coletadas"] > 0:
             fees_temp = pool["fees_nao_coletadas"]
             novas_sacadas = pool["fees_sacadas"] + fees_temp
@@ -703,27 +748,38 @@ else:
                 pool["fees_reinvestidas"],
                 0.0,
             )
-            st.success(f"${fees_temp:,.2f} sacados!")
+            st.success("Fees sacadas!")
             st.rerun()
 
-        if btn5.button(f"🔒 Fechar/Ativar", key=f"close_{pool['id']}"):
-          novo_st = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
-          update_pool_status_db(pool["id"], novo_st)
-          st.rerun()
+        with col_b5:
+          with st.popover("⚙️ Mais Opções", use_container_width=True):
+            if st.button(
+                "🔒 Fechar/Ativar Pool",
+                key=f"close_{pool['id']}",
+                use_container_width=True,
+            ):
+              novo_st = "Fechada" if pool["estado"] == "Ativa" else "Ativa"
+              update_pool_status_db(pool["id"], novo_st)
+              st.rerun()
 
-        if btn6.button(f"🗑️ Excluir", key=f"del_{pool['id']}"):
-          delete_pool_db(pool["id"])
-          st.rerun()
+            if st.button(
+                "🗑️ Excluir Pool",
+                key=f"del_{pool['id']}",
+                use_container_width=True,
+                type="primary",
+            ):
+              delete_pool_db(pool["id"])
+              st.rerun()
 
-        # GRÁFICO E ALTERNADOR
+        # GRÁFICO ANALÍTICO
         st.write(" ")
         col_g_title, col_g_btn = st.columns([2, 3])
         with col_g_title:
-          st.subheader("📈 Histórico Analítico")
+          st.markdown("##### 📈 Histórico de Performance")
 
         with col_g_btn:
           metric_choice = st.radio(
-              "Métrica do Gráfico",
+              "Métrica",
               options=["Liquidez ($)", "APR das Fees (%)"],
               horizontal=True,
               key=f"metric_choice_{pool['id']}",
@@ -783,17 +839,18 @@ else:
         fig = px.line(
             df_chart, x="Data", y=y_col, line_shape="spline", markers=True
         )
-        fig.update_traces(line_color=line_color, line_width=3)
+        fig.update_traces(line_color=line_color, line_width=2.5)
         fig.update_layout(
             template="plotly_dark",
-            height=260,
-            margin=dict(l=20, r=20, t=10, b=10),
+            height=250,
+            margin=dict(l=10, r=10, t=10, b=10),
             xaxis_title="",
             yaxis_title="",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.write("🟦 **Ajuste o Intervalo de Datas:**")
         selected_range = st.slider(
             "Seleção de Intervalo",
             min_value=dt_entrada,
@@ -803,22 +860,5 @@ else:
             key=slider_key,
             label_visibility="collapsed",
         )
-
-        dt_inicio_sel, dt_fim_sel = selected_range
-        dias_selecionados = (dt_fim_sel - dt_inicio_sel).days
-        if dias_selecionados <= 0:
-          dias_selecionados = 1
-
-        apr_periodo = (
-            (total_fees_geradas_pool / pool["valor_inicial"])
-            * (365 / dias_selecionados)
-            * 100
-            if pool["valor_inicial"] > 0
-            else 0
-        )
-
-        c_res1, c_res2 = st.columns(2)
-        c_res1.info(f"📅 **Dias Selecionados:** {dias_selecionados} dias")
-        c_res2.success(f"⚡ **APR no Intervalo:** {apr_periodo:.2f}%")
 
         st.markdown("---")
