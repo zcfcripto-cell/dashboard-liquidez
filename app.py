@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
-# CONSULTA DE PREÇOS NO DEXSCREENER (COM TRATAMENTO DE NULOS)
+# CONSULTA DE PREÇOS NO DEXSCREENER
 # -------------------------------------------------------------
 def fetch_dexscreener_price(position_nft_address):
     if not position_nft_address or not isinstance(position_nft_address, str):
@@ -275,7 +275,7 @@ def modal_sincronizar_carteira(pool_id, price_usd=None, price_native=None):
         val_default = float(pool["valor_atual"]) if pool["valor_atual"] > 0 else float(pool["valor_inicial"])
 
         with st.form(key=f"form_sync_{pool_id}"):
-            novo_end = st.text_input("Position Mint Address (NFT ID):", value=pool.get("wallet_address", ""))
+            novo_end = st.text_input("Endereço do Par (DexScreener) ou Position Mint Address:", value=pool.get("wallet_address", ""))
             v_manual = st.number_input("Valor Atual da Pool ($ USD):", min_value=0.0, value=val_default, step=10.0)
             f_manual = st.number_input("Fees Acumuladas ($ USD):", min_value=0.0, value=float(pool["fees"]), step=0.5)
 
@@ -338,7 +338,7 @@ def modal_atualizar_pool(pool_id):
         with st.form(key=f"form_edit_modal_{pool_id}"):
             novo_valor_atual = st.number_input("Valor Atual ($ USD)", min_value=0.0, value=val_default, step=10.0)
             novas_fees = st.number_input("Total Fees ($ USD)", min_value=0.0, value=float(pool["fees"]), step=0.5)
-            end_carteira = st.text_input("Position Mint Address (NFT ID)", value=pool.get("wallet_address", ""))
+            end_carteira = st.text_input("Endereço do Par (DexScreener) / Position Mint Address", value=pool.get("wallet_address", ""))
 
             col_r1, col_r2 = st.columns(2)
             novo_r_min = col_r1.number_input("Range Mínimo", value=float(pool["range_min"]), format="%.6f", step=0.000001)
@@ -363,7 +363,7 @@ with st.sidebar:
         v_init = st.number_input("Valor Inicial ($)", min_value=0.0, key="form_v_init")
         v_atual = st.number_input("Valor Atual ($)", min_value=0.0, key="form_v_atual")
         fees_in = st.number_input("Fees Pendentes ($)", min_value=0.0, key="form_fees")
-        wallet_addr = st.text_input("Position Mint Address (NFT)", key="form_wallet_addr")
+        wallet_addr = st.text_input("Endereço do Par / Position Mint Address", key="form_wallet_addr")
         col_r1, col_r2 = st.columns(2)
         r_min = col_r1.number_input("Range Mín", key="form_r_min", format="%.6f", step=0.000001)
         r_max = col_r2.number_input("Range Máx", key="form_r_max", format="%.6f", step=0.000001)
