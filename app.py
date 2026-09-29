@@ -47,7 +47,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    # 1. Tabela Principal de Pools
     c.execute('''
         CREATE TABLE IF NOT EXISTS pools (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +63,6 @@ def init_db():
         )
     ''')
 
-    # Garantir colunas essenciais
     c.execute("PRAGMA table_info(pools)")
     existing_cols = [col[1] for col in c.fetchall()]
 
@@ -80,7 +78,6 @@ def init_db():
     if "wallet_address" not in existing_cols:
         c.execute("ALTER TABLE pools ADD COLUMN wallet_address TEXT DEFAULT ''")
 
-    # 2. Tabela de Aportes
     c.execute('''
         CREATE TABLE IF NOT EXISTS aportes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,7 +88,6 @@ def init_db():
         )
     ''')
 
-    # 3. Tabela de Saques de Fees
     c.execute('''
         CREATE TABLE IF NOT EXISTS saques (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,7 +132,7 @@ def load_pools():
             fees_val = float(row_dict.get("fees_sacadas", 0) or 0) + float(row_dict.get("fees_reinvestidas", 0) or 0) + float(row_dict.get("fees_nao_coletadas", 0) or 0)
 
         pools.append({
-            "id": row_dict.get("id"),
+            "id": int(row_dict.get("id")),
             "par": row_dict.get("par", "POOL/USD"),
             "rede": row_dict.get("rede", "DEX"),
             "estado": row_dict.get("estado", "Ativa"),
@@ -168,18 +164,18 @@ def update_pool_db(pool_id, valor_atual, fees, data_entrada, wallet_addr="", r_m
             UPDATE pools 
             SET valor_atual = ?, fees = ?, data_entrada = ?, wallet_address = ?, range_min = ?, range_max = ?
             WHERE id = ?
-        ''', (valor_atual, fees, data_entrada.strftime("%Y-%m-%d"), wallet_addr, r_min, r_max, pool_id))
+        ''', (valor_atual, fees, data_entrada.strftime("%Y-%m-%d"), wallet_addr, r_min, r_max, int(pool_id)))
     else:
         c.execute('''
             UPDATE pools 
             SET valor_atual = ?, fees = ?, data_entrada = ?, wallet_address = ?
             WHERE id = ?
-        ''', (valor_atual, fees, data_entrada.strftime("%Y-%m-%d"), wallet_addr, pool_id))
+        ''', (valor_atual, fees, data_entrada.strftime("%Y-%m-%d"), wallet_addr, int(pool_id)))
     conn.commit()
     conn.close()
 
 # -------------------------------------------------------------
-# FUNÇÕES DE GESTÃO DE APORTES (CRUD)
+# FUNÇÕES DE GESTÃO DE APORTES (CRUD COM INT CONVERSION)
 # -------------------------------------------------------------
 def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
     conn = sqlite3.connect(DB_FILE)
@@ -187,12 +183,12 @@ def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
     c.execute('''
         INSERT INTO aportes (pool_id, valor, data_aporte)
         VALUES (?, ?, ?)
-    ''', (pool_id, valor_aporte, data_aporte.strftime("%Y-%m-%d")))
+    ''', (int(pool_id), valor_aporte, data_aporte.strftime("%Y-%m-%d")))
     c.execute('''
         UPDATE pools 
         SET valor_atual = valor_atual + ?, valor_inicial = valor_inicial + ?
         WHERE id = ?
-    ''', (valor_aporte, valor_aporte, pool_id))
+    ''', (valor_aporte, valor_aporte, int(pool_id)))
     conn.commit()
     conn.close()
 
@@ -202,8 +198,8 @@ def get_historico_aportes(pool_id):
     c.execute('''
         SELECT id, data_aporte, valor FROM aportes 
         WHERE pool_id = ? 
-        ORDER BY data_aporte DESC, id DESC
-    ''', (pool_id,))
+        ORDER BY id DESC
+    ''', (int(pool_id),))
     rows = c.fetchall()
     conn.close()
     return rows
@@ -216,29 +212,29 @@ def update_aporte_db(aporte_id, pool_id, novo_valor, nova_data, valor_antigo):
         UPDATE aportes 
         SET valor = ?, data_aporte = ?
         WHERE id = ?
-    ''', (novo_valor, nova_data.strftime("%Y-%m-%d"), aporte_id))
+    ''', (novo_valor, nova_data.strftime("%Y-%m-%d"), int(aporte_id)))
     c.execute('''
         UPDATE pools 
         SET valor_atual = valor_atual + ?, valor_inicial = valor_inicial + ?
         WHERE id = ?
-    ''', (diferenca, diferenca, pool_id))
+    ''', (diferenca, diferenca, int(pool_id)))
     conn.commit()
     conn.close()
 
 def delete_aporte_db(aporte_id, pool_id, valor_aporte):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("DELETE FROM aportes WHERE id = ?", (aporte_id,))
+    c.execute("DELETE FROM aportes WHERE id = ?", (int(aporte_id),))
     c.execute('''
         UPDATE pools 
         SET valor_atual = MAX(0, valor_atual - ?), valor_inicial = MAX(0, valor_inicial - ?)
         WHERE id = ?
-    ''', (valor_aporte, valor_aporte, pool_id))
+    ''', (valor_aporte, valor_aporte, int(pool_id)))
     conn.commit()
     conn.close()
 
 # -------------------------------------------------------------
-# FUNÇÕES DE GESTÃO DE SAQUES (SOMA AUTOMÁTICA ÀS FEES TOTAIS)
+# FUNÇÕES DE GESTÃO DE SAQUES (CRUD COM INT CONVERSION)
 # -------------------------------------------------------------
 def registrar_saque_db(pool_id, valor_saque, data_saque):
     conn = sqlite3.connect(DB_FILE)
@@ -246,12 +242,12 @@ def registrar_saque_db(pool_id, valor_saque, data_saque):
     c.execute('''
         INSERT INTO saques (pool_id, valor, data_saque)
         VALUES (?, ?, ?)
-    ''', (pool_id, valor_saque, data_saque.strftime("%Y-%m-%d")))
+    ''', (int(pool_id), valor_saque, data_saque.strftime("%Y-%m-%d")))
     c.execute('''
         UPDATE pools 
         SET fees = fees + ?
         WHERE id = ?
-    ''', (valor_saque, pool_id))
+    ''', (valor_saque, int(pool_id)))
     conn.commit()
     conn.close()
 
@@ -261,8 +257,8 @@ def get_historico_saques(pool_id):
     c.execute('''
         SELECT id, data_saque, valor FROM saques 
         WHERE pool_id = ? 
-        ORDER BY data_saque DESC, id DESC
-    ''', (pool_id,))
+        ORDER BY id DESC
+    ''', (int(pool_id),))
     rows = c.fetchall()
     conn.close()
     return rows
@@ -275,24 +271,24 @@ def update_saque_db(saque_id, pool_id, novo_valor, nova_data, valor_antigo):
         UPDATE saques 
         SET valor = ?, data_saque = ?
         WHERE id = ?
-    ''', (novo_valor, nova_data.strftime("%Y-%m-%d"), saque_id))
+    ''', (novo_valor, nova_data.strftime("%Y-%m-%d"), int(saque_id)))
     c.execute('''
         UPDATE pools 
         SET fees = MAX(0, fees + ?)
         WHERE id = ?
-    ''', (diferenca, pool_id))
+    ''', (diferenca, int(pool_id)))
     conn.commit()
     conn.close()
 
 def delete_saque_db(saque_id, pool_id, valor_saque):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("DELETE FROM saques WHERE id = ?", (saque_id,))
+    c.execute("DELETE FROM saques WHERE id = ?", (int(saque_id),))
     c.execute('''
         UPDATE pools 
         SET fees = MAX(0, fees - ?)
         WHERE id = ?
-    ''', (valor_saque, pool_id))
+    ''', (valor_saque, int(pool_id)))
     conn.commit()
     conn.close()
 
@@ -302,16 +298,16 @@ def delete_saque_db(saque_id, pool_id, valor_saque):
 def update_pool_status_db(pool_id, novo_estado):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("UPDATE pools SET estado = ? WHERE id = ?", (novo_estado, pool_id))
+    c.execute("UPDATE pools SET estado = ? WHERE id = ?", (novo_estado, int(pool_id)))
     conn.commit()
     conn.close()
 
 def delete_pool_db(pool_id):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("DELETE FROM pools WHERE id = ?", (pool_id,))
-    c.execute("DELETE FROM aportes WHERE pool_id = ?", (pool_id,))
-    c.execute("DELETE FROM saques WHERE pool_id = ?", (pool_id,))
+    c.execute("DELETE FROM pools WHERE id = ?", (int(pool_id),))
+    c.execute("DELETE FROM aportes WHERE pool_id = ?", (int(pool_id),))
+    c.execute("DELETE FROM saques WHERE pool_id = ?", (int(pool_id),))
     conn.commit()
     conn.close()
 
@@ -436,7 +432,7 @@ def modal_gerir_aportes(pool_id):
         
         with tab_novo:
             st.write(f"Registar um novo aporte de liquidez para a pool **{pool['par']}**:")
-            with st.form(key=f"form_aporte_{pool_id}"):
+            with st.form(key=f"form_add_aporte_{pool_id}"):
                 v_aporte = st.number_input("Valor do Aporte ($ USD):", min_value=0.01, value=100.0, step=10.0)
                 dt_aporte = st.date_input("Data do Aporte:", datetime.date.today())
                 sub = st.form_submit_button("Confirmar e Incrementar Liquidez", type="primary", use_container_width=True)
@@ -490,7 +486,7 @@ def modal_gerir_saques(pool_id):
 
         with tab_novo:
             st.write(f"Registar saque de fees para a pool **{pool['par']}** (Fees Acumuladas Totais: **${pool['fees']:,.2f}**):")
-            with st.form(key=f"form_saque_{pool_id}"):
+            with st.form(key=f"form_add_saque_{pool_id}"):
                 v_saque = st.number_input("Valor do Saque ($ USD):", min_value=0.01, value=27.35, step=1.0)
                 dt_saque = st.date_input("Data do Saque:", datetime.date.today())
                 sub = st.form_submit_button("Confirmar Saque de Fees", type="primary", use_container_width=True)
@@ -705,7 +701,6 @@ else:
 
                 st.write(" ")
 
-                # BOTÕES DE AÇÃO LIMPOS E UNIFICADOS
                 col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
 
                 if col_b1.button("✏️ Editar", key=f"edit_{pool['id']}", use_container_width=True):
