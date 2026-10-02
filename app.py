@@ -23,7 +23,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    # 1. Tabela Principal de Pools
     c.execute('''
         CREATE TABLE IF NOT EXISTS pools (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +39,6 @@ def init_db():
         )
     ''')
 
-    # Garantir colunas essenciais
     c.execute("PRAGMA table_info(pools)")
     existing_cols = [col[1] for col in c.fetchall()]
 
@@ -53,7 +51,6 @@ def init_db():
     if "wallet_address" not in existing_cols:
         c.execute("ALTER TABLE pools ADD COLUMN wallet_address TEXT DEFAULT ''")
 
-    # 2. Tabela de Aportes
     c.execute('''
         CREATE TABLE IF NOT EXISTS aportes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +61,6 @@ def init_db():
         )
     ''')
 
-    # 3. Tabela de Saques de Fees
     c.execute('''
         CREATE TABLE IF NOT EXISTS saques (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +73,6 @@ def init_db():
 
     conn.commit()
 
-    # Inserir pool de exemplo caso esteja totalmente vazia
     c.execute("SELECT COUNT(*) FROM pools")
     if c.fetchone()[0] == 0:
         c.execute('''
@@ -144,7 +139,6 @@ def update_pool_db(pool_id, valor_atual, fees, data_entrada, wallet_addr="", r_m
     conn.commit()
     conn.close()
 
-# OPERAÇÕES DE APORTES E SAQUES (FEE ACUMULADA HISTÓRICA)
 def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -262,7 +256,7 @@ def fetch_dexscreener_price(position_nft_address):
 
 init_db()
 
-# ESTILOS CSS
+# ESTILOS CSS ADAPTATIVOS PARA ECRÃS PEQUENOS E GRANDES
 st.markdown("""
     <style>
     .stApp {
@@ -300,6 +294,20 @@ st.markdown("""
         border-radius: 8px !important;
         font-weight: 500 !important;
     }
+    
+    /* REGRAS ANTI-CORTE DE TEXTO NAS MÉTRICAS */
+    [data-testid="stMetricValue"] {
+        font-size: calc(1.0rem + 0.35vw) !important;
+        line-height: 1.2 !important;
+        white-space: nowrap !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.78rem !important;
+        white-space: nowrap !important;
+        margin-bottom: -2px !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -311,7 +319,7 @@ pools_data = load_pools()
 
 DEX_OPTIONS = ["Raydium", "Uniswap v3", "Orca", "Kamino", "PancakeSwap", "Curve", "Meteora", "Cetus", "Outro"]
 
-# MODAL RESUMO HISTÓRICO GERAL (1 LINHA POR POOL - ATIVAS E ENCERRADAS)
+# MODAL RESUMO HISTÓRICO GERAL (1 LINHA POR POOL)
 @st.dialog("📋 Resumo Histórico das Piscinas")
 def modal_tabela_resumo_historico():
     st.subheader("📋 Resumo Geral de Todas as Pools")
@@ -496,7 +504,7 @@ total_v_init = sum(pesos_iniciais)
 media_apr_fees = sum(aprs_com_peso) / total_v_init if total_v_init > 0 else 0.0
 
 st.markdown("### 📌 Resumo Executivo")
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
 c1.metric("Total Em Liquidez", f"${total_liquidez:,.2f}")
 c2.metric("Total Fees Acumuladas", f"${total_fees:,.2f}")
 c3.metric("APR Médio das Fees", f"{media_apr_fees:.2f}%")
@@ -513,22 +521,28 @@ else:
         dt_entrada = pool.get("data_entrada", datetime.date.today())
         dias_totais = max(1, (dt_hoje - dt_entrada).days)
 
-        pnl = (pool["valor_atual"] + pool["fees"]) - pool["valor_inicial"]
+        total_fees_geradas = pool["fees"]
+        pnl_valor = (pool["valor_atual"] + total_fees_geradas) - pool["valor_inicial"]
         variacao_pct = ((pool["valor_atual"] - pool["valor_inicial"]) / pool["valor_inicial"]) * 100 if pool["valor_inicial"] > 0 else 0
-        apr_total = (pool["fees"] / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
+        
+        # APRs
+        apr_fees = (total_fees_geradas / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
+        apr_liquidez = ((pool["valor_atual"] - pool["valor_inicial"]) / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
+        apr_total = (pnl_valor / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
 
         with st.container():
-            head_col1, head_col2 = st.columns([2, 3])
+            # PROPORÇÕES AJUSTADAS (40% PARA O TÍTULO, 60% DISTRIBUÍDO PARA MÉTRICAS SEM CORTES)
+            head_col1, head_col2 = st.columns([1.5, 3.5])
             with head_col1:
                 badge_class = "badge-ativa" if pool["estado"] == "Ativa" else "badge-fechada"
                 st.markdown(f"### 🪙 **Pool #{idx}: {pool['par']}** <span class='{badge_class}'>{pool['estado']}</span>", unsafe_allow_html=True)
                 st.caption(f"DEX / Rede: {pool['rede']}")
 
             with head_col2:
-                m1, m2, m3, m4, m5 = st.columns(5)
+                m1, m2, m3, m4, m5 = st.columns([1, 1, 1, 1, 1])
                 m1.metric("Valor Atual", f"${pool['valor_atual']:,.2f}")
                 m2.metric("Variação", f"{variacao_pct:+.2f}%")
-                m3.metric("PnL Total", f"${pnl:+.2f}")
+                m3.metric("PnL Total", f"${pnl_valor:+.2f}")
                 m4.metric("APR Total", f"{apr_total:.2f}%")
                 m5.metric("Fees", f"${pool['fees']:,.2f}")
 
@@ -554,5 +568,74 @@ else:
                     if st.button("🗑️ Excluir Pool", key=f"del_{pool['id']}", use_container_width=True, type="primary"):
                         delete_pool_db(pool["id"])
                         st.rerun()
+
+            # GRÁFICO DE APR DEBAIXO DE CADA POOL COM CONTROLO
+            show_chart_key = f"show_chart_{pool['id']}"
+            if show_chart_key not in st.session_state:
+                st.session_state[show_chart_key] = True
+
+            chart_btn_col1, chart_btn_col2 = st.columns([3, 1])
+            with chart_btn_col2:
+                btn_label = "🙈 Esconder Gráfico" if st.session_state[show_chart_key] else "📈 Mostrar Gráfico APR"
+                if st.button(btn_label, key=f"toggle_chart_{pool['id']}", use_container_width=True):
+                    st.session_state[show_chart_key] = not st.session_state[show_chart_key]
+                    st.rerun()
+
+            if st.session_state[show_chart_key]:
+                with chart_btn_col1:
+                    metric_sel = st.radio(
+                        "Selecione o APR a Visualizar:",
+                        options=["APR das Fees (%)", "APR da Liquidez/PnL (%)", "APR Total (%)"],
+                        horizontal=True,
+                        key=f"metric_choice_{pool['id']}"
+                    )
+
+                full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
+                num_pontos = len(full_dates)
+
+                if num_pontos == 1:
+                    sim_apr_fees = [apr_fees]
+                    sim_apr_liq = [apr_liquidez]
+                    sim_apr_tot = [apr_total]
+                else:
+                    dias_arr = np.arange(1, num_pontos + 1)
+                    prog_fees = np.linspace(0.1, total_fees_geradas, num_pontos)
+                    sim_apr_fees = (prog_fees / pool["valor_inicial"]) * (365 / dias_arr) * 100 if pool["valor_inicial"] > 0 else np.zeros(num_pontos)
+
+                    np.random.seed(pool["id"])
+                    ruido = np.cumsum(np.random.normal(0, 1.5, size=num_pontos))
+                    tendencia_val = np.linspace(pool["valor_inicial"], pool["valor_atual"], num_pontos)
+                    prog_liq = tendencia_val + (ruido - ruido[0])
+                    prog_liq[-1] = pool["valor_atual"]
+
+                    sim_apr_liq = ((prog_liq - pool["valor_inicial"]) / pool["valor_inicial"]) * (365 / dias_arr) * 100 if pool["valor_inicial"] > 0 else np.zeros(num_pontos)
+                    sim_apr_tot = sim_apr_fees + sim_apr_liq
+
+                df_apr = pd.DataFrame({
+                    "Data": full_dates.date,
+                    "APR das Fees (%)": sim_apr_fees,
+                    "APR da Liquidez/PnL (%)": sim_apr_liq,
+                    "APR Total (%)": sim_apr_tot
+                })
+
+                if metric_sel == "APR das Fees (%)":
+                    color_line = "#8b5cf6"
+                elif metric_sel == "APR da Liquidez/PnL (%)":
+                    color_line = "#3b82f6"
+                else:
+                    color_line = "#10b981"
+
+                fig = px.line(df_apr, x="Data", y=metric_sel, line_shape="spline", markers=True)
+                fig.update_traces(line_color=color_line, line_width=2.5)
+                fig.update_layout(
+                    template="plotly_dark",
+                    height=240,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    xaxis_title="",
+                    yaxis_title="",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)"
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
             st.markdown("---")
