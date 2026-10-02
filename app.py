@@ -33,7 +33,7 @@ def load_pools():
 
     url = f"{SUPABASE_URL}/rest/v1/pools?select=*&order=id.asc"
     try:
-        res = requests.get(url, headers=HEADERS, timeout=6)
+        res = requests.get(url, headers=HEADERS, timeout=8)
         if res.status_code == 200:
             data = res.json()
             pools = []
@@ -57,8 +57,10 @@ def load_pools():
                     "wallet_address": str(r.get("wallet_address", ""))
                 })
             return pools
+        else:
+            st.error(f"Erro ao carregar do Supabase (Código {res.status_code}): {res.text}")
     except Exception as e:
-        st.error(f"Erro ao carregar piscinas do Supabase: {e}")
+        st.error(f"Erro de conexão ao Supabase: {e}")
     return []
 
 def add_pool_db(par, rede, valor_inicial, valor_atual, fees, r_min, r_max, data_in, wallet_addr):
@@ -75,7 +77,14 @@ def add_pool_db(par, rede, valor_inicial, valor_atual, fees, r_min, r_max, data_
         "data_entrada": data_in.strftime("%Y-%m-%d"),
         "wallet_address": wallet_addr
     }
-    requests.post(url, headers=HEADERS, json=payload)
+    try:
+        res = requests.post(url, headers=HEADERS, json=payload, timeout=8)
+        if res.status_code in [200, 201]:
+            return True, "Pool adicionada com sucesso no Supabase!"
+        else:
+            return False, f"Erro {res.status_code}: {res.text}"
+    except Exception as e:
+        return False, f"Erro de conexão: {str(e)}"
 
 def update_pool_db(pool_id, valor_atual, fees, data_entrada, wallet_addr="", r_min=None, r_max=None):
     url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
@@ -88,7 +97,11 @@ def update_pool_db(pool_id, valor_atual, fees, data_entrada, wallet_addr="", r_m
     if r_min is not None and r_max is not None:
         payload["range_min"] = r_min
         payload["range_max"] = r_max
-    requests.patch(url, headers=HEADERS, json=payload)
+    try:
+        res = requests.patch(url, headers=HEADERS, json=payload, timeout=8)
+        return res.status_code in [200, 204]
+    except Exception:
+        return False
 
 def update_pool_status_db(pool_id, novo_estado):
     url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
@@ -112,7 +125,6 @@ def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
     }
     requests.post(url_apt, headers=HEADERS, json=payload)
 
-    # Buscar pool atual para atualizar valores
     pool = next((p for p in load_pools() if p["id"] == pool_id), None)
     if pool:
         n_v_init = pool["valor_inicial"] + valor_aporte
@@ -317,9 +329,11 @@ def modal_sincronizar_carteira(pool_id, price_usd=None, price_native=None):
             if sub:
                 valor_final = v_manual if v_manual > 0 else pool["valor_inicial"]
                 data_ent = pool.get("data_entrada", datetime.date.today())
-                update_pool_db(pool_id, valor_final, f_manual, data_ent, novo_end, r_min=r_min_modal, r_max=r_max_modal)
-                st.success("Dados atualizados na nuvem!")
-                st.rerun()
+                if update_pool_db(pool_id, valor_final, f_manual, data_ent, novo_end, r_min=r_min_modal, r_max=r_max_modal):
+                    st.success("Dados atualizados na nuvem!")
+                    st.rerun()
+                else:
+                    st.error("Erro ao atualizar a pool no Supabase.")
 
 @st.dialog("➕ Gestão de Aportes")
 def modal_gerir_aportes(pool_id):
@@ -386,9 +400,11 @@ def modal_atualizar_pool(pool_id):
             novo_r_max = col_r2.number_input("Range Máx", value=float(pool["range_max"]), format="%.6f", step=0.000001)
             nova_dt = st.date_input("Data Entrada", value=pool["data_entrada"])
             if st.form_submit_button("Guardar Alterações", type="primary", use_container_width=True):
-                update_pool_db(pool_id, novo_v_atual, novas_fees, nova_dt, end_c, r_min=novo_r_min, r_max=novo_r_max)
-                st.success("Alterações salvas!")
-                st.rerun()
+                if update_pool_db(pool_id, novo_v_atual, novas_fees, nova_dt, end_c, r_min=novo_r_min, r_max=novo_r_max):
+                    st.success("Alterações salvas!")
+                    st.rerun()
+                else:
+                    st.error("Erro ao guardar as alterações no Supabase.")
 
 # PAINEL LATERAL
 with st.sidebar:
@@ -410,9 +426,17 @@ with st.sidebar:
             nome_par = par if par else "POOL/USD"
             nome_rede = f"{dex} - {rede if rede else 'Rede'}"
             v_actual_calc = v_atual if v_atual > 0 else v_init
-            add_pool_db(nome_par, nome_rede, float(v_init), float(v_actual_calc), float(fees_in), float(r_min), float(r_max), data_in, wallet_addr)
-            st.success("Pool gravada no Supabase!")
-            st.rerun()
+            
+            sucesso, msg = add_pool_db(
+                nome_par, nome_rede, float(v_init), float(v_actual_calc), 
+                float(fees_in), float(r_min), float(r_max), data_in, wallet_addr
+            )
+            
+            if sucesso:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
     st.markdown("---")
     if st.button("🗑️ Limpar Portfólio"):
