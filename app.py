@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 
@@ -115,7 +116,7 @@ def clear_all_pools_db():
     url = f"{SUPABASE_URL}/rest/v1/pools?id=gt.0"
     requests.delete(url, headers=HEADERS)
 
-# APORTES E SAQUES (HISTÓRICO NO SUPABASE)
+# APORTES: AUMENTA APENAS O VALOR INICIAL (NÃO MEXE NA LIQUIDEZ ATUAL)
 def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
     url_apt = f"{SUPABASE_URL}/rest/v1/aportes"
     payload = {
@@ -128,9 +129,8 @@ def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
     pool = next((p for p in load_pools() if p["id"] == pool_id), None)
     if pool:
         n_v_init = pool["valor_inicial"] + valor_aporte
-        n_v_atual = pool["valor_atual"] + valor_aporte
         url_p = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
-        requests.patch(url_p, headers=HEADERS, json={"valor_inicial": n_v_init, "valor_atual": n_v_atual})
+        requests.patch(url_p, headers=HEADERS, json={"valor_inicial": n_v_init})
 
 def get_historico_aportes(pool_id):
     url = f"{SUPABASE_URL}/rest/v1/aportes?pool_id=eq.{pool_id}&order=id.desc"
@@ -149,9 +149,8 @@ def delete_aporte_db(aporte_id, pool_id, valor_aporte):
     pool = next((p for p in load_pools() if p["id"] == pool_id), None)
     if pool:
         n_v_init = max(0.0, pool["valor_inicial"] - valor_aporte)
-        n_v_atual = max(0.0, pool["valor_atual"] - valor_aporte)
         url_p = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
-        requests.patch(url_p, headers=HEADERS, json={"valor_inicial": n_v_init, "valor_atual": n_v_atual})
+        requests.patch(url_p, headers=HEADERS, json={"valor_inicial": n_v_init})
 
 def registrar_saque_db(pool_id, valor_saque, data_saque):
     url_sq = f"{SUPABASE_URL}/rest/v1/saques"
@@ -346,7 +345,7 @@ def modal_gerir_aportes(pool_id):
                 dt_aporte = st.date_input("Data do Aporte:", datetime.date.today())
                 if st.form_submit_button("Confirmar Aporte", type="primary", use_container_width=True):
                     registrar_aporte_db(pool_id, v_aporte, dt_aporte)
-                    st.success("Aporte guardado no Supabase!")
+                    st.success("Aporte registado (adicionado ao valor inicial)!")
                     st.rerun()
         with tab_hist:
             historico = get_historico_aportes(pool_id)
@@ -481,26 +480,26 @@ else:
         dias_totais = max(1, (dt_hoje - dt_entrada).days)
 
         total_fees_geradas = pool["fees"]
-        pnl_valor = (pool["valor_atual"] + total_fees_geradas) - pool["valor_inicial"]
+        pnl_liquidez_usd = pool["valor_atual"] - pool["valor_inicial"]
+        pnl_total_usd = (pool["valor_atual"] + total_fees_geradas) - pool["valor_inicial"]
         variacao_pct = ((pool["valor_atual"] - pool["valor_inicial"]) / pool["valor_inicial"]) * 100 if pool["valor_inicial"] > 0 else 0
         
-        # APRs
         apr_fees = (total_fees_geradas / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
-        apr_liquidez = ((pool["valor_atual"] - pool["valor_inicial"]) / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
-        apr_total = (pnl_valor / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
+        apr_liquidez = (pnl_liquidez_usd / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
+        apr_total = (pnl_total_usd / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
 
         with st.container():
             head_col1, head_col2 = st.columns([1.5, 3.5])
             with head_col1:
                 badge_class = "badge-ativa" if pool["estado"] == "Ativa" else "badge-fechada"
                 st.markdown(f"### 🪙 **Pool #{idx}: {pool['par']}** <span class='{badge_class}'>{pool['estado']}</span>", unsafe_allow_html=True)
-                st.caption(f"DEX / Rede: {pool['rede']}")
+                st.caption(f"DEX / Rede: {pool['rede']} | Investido Inicial: ${pool['valor_inicial']:,.2f}")
 
             with head_col2:
                 m1, m2, m3, m4, m5 = st.columns([1, 1, 1, 1, 1])
                 m1.metric("Valor Atual", f"${pool['valor_atual']:,.2f}")
                 m2.metric("Variação", f"{variacao_pct:+.2f}%")
-                m3.metric("PnL Total", f"${pnl_valor:+.2f}")
+                m3.metric("PnL Total", f"${pnl_total_usd:+.2f}")
                 m4.metric("APR Total", f"{apr_total:.2f}%")
                 m5.metric("Fees", f"${pool['fees']:,.2f}")
 
@@ -527,20 +526,89 @@ else:
                         delete_pool_db(pool["id"])
                         st.rerun()
 
-            # GRÁFICO DE APR DEBAIXO DE CADA POOL COM CONTROLO
+            # GRÁFICOS INTERATIVOS
             show_chart_key = f"show_chart_{pool['id']}"
             if show_chart_key not in st.session_state:
                 st.session_state[show_chart_key] = True
 
             chart_btn_col1, chart_btn_col2 = st.columns([3, 1])
             with chart_btn_col2:
-                btn_label = "🙈 Esconder Gráfico" if st.session_state[show_chart_key] else "📈 Mostrar Gráfico APR"
+                btn_label = "🙈 Esconder Gráficos" if st.session_state[show_chart_key] else "📈 Mostrar Gráficos"
                 if st.button(btn_label, key=f"toggle_chart_{pool['id']}", use_container_width=True):
                     st.session_state[show_chart_key] = not st.session_state[show_chart_key]
                     st.rerun()
 
             if st.session_state[show_chart_key]:
-                with chart_btn_col1:
+                tab_il_vs_fees, tab_apr_perc = st.tabs([
+                    "⚖️ Fees vs. Impermanent Loss / PnL ($)", 
+                    "📊 Percentuais de APR (%)"
+                ])
+
+                full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
+                num_pontos = len(full_dates)
+
+                if num_pontos == 1:
+                    prog_fees = np.array([total_fees_geradas])
+                    prog_pnl_liq = np.array([pnl_liquidez_usd])
+                    sim_apr_fees = [apr_fees]
+                    sim_apr_liq = [apr_liquidez]
+                    sim_apr_tot = [apr_total]
+                else:
+                    dias_arr = np.arange(1, num_pontos + 1)
+                    prog_fees = np.linspace(0.0, total_fees_geradas, num_pontos)
+
+                    np.random.seed(pool["id"])
+                    ruido = np.cumsum(np.random.normal(0, 1.5, size=num_pontos))
+                    tendencia_val = np.linspace(pool["valor_inicial"], pool["valor_atual"], num_pontos)
+                    prog_liq_val = tendencia_val + (ruido - ruido[0])
+                    prog_liq_val[-1] = pool["valor_atual"]
+
+                    prog_pnl_liq = prog_liq_val - pool["valor_inicial"]
+
+                    sim_apr_fees = (prog_fees / pool["valor_inicial"]) * (365 / dias_arr) * 100 if pool["valor_inicial"] > 0 else np.zeros(num_pontos)
+                    sim_apr_liq = (prog_pnl_liq / pool["valor_inicial"]) * (365 / dias_arr) * 100 if pool["valor_inicial"] > 0 else np.zeros(num_pontos)
+                    sim_apr_tot = sim_apr_fees + sim_apr_liq
+
+                df_metrics = pd.DataFrame({
+                    "Data": full_dates.date,
+                    "Fees Acumuladas ($)": prog_fees,
+                    "PnL / IL da Liquidez ($)": prog_pnl_liq,
+                    "APR das Fees (%)": sim_apr_fees,
+                    "APR da Liquidez/PnL (%)": sim_apr_liq,
+                    "APR Total (%)": sim_apr_tot
+                })
+
+                # ABA 1: GRÁFICO COMPARATIVO FEES VS IL / PNL ($)
+                with tab_il_vs_fees:
+                    fig_comp = go.Figure()
+                    fig_comp.add_trace(go.Scatter(
+                        x=df_metrics["Data"], 
+                        y=df_metrics["Fees Acumuladas ($)"],
+                        mode='lines+markers',
+                        name='Fees Acumuladas ($)',
+                        line=dict(color='#10b981', width=3)
+                    ))
+                    fig_comp.add_trace(go.Scatter(
+                        x=df_metrics["Data"], 
+                        y=df_metrics["PnL / IL da Liquidez ($)"],
+                        mode='lines+markers',
+                        name='PnL / IL da Liquidez ($)',
+                        line=dict(color='#ef4444' if pnl_liquidez_usd < 0 else '#3b82f6', width=2.5)
+                    ))
+                    fig_comp.update_layout(
+                        template="plotly_dark",
+                        height=250,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        xaxis_title="",
+                        yaxis_title="Dólares ($ USD)",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)"
+                    )
+                    st.plotly_chart(fig_comp, use_container_width=True)
+
+                # ABA 2: GRÁFICO SELETOR DE APR (%)
+                with tab_apr_perc:
                     metric_sel = st.radio(
                         "Selecione o APR a Visualizar:",
                         options=["APR das Fees (%)", "APR da Liquidez/PnL (%)", "APR Total (%)"],
@@ -548,52 +616,24 @@ else:
                         key=f"metric_choice_{pool['id']}"
                     )
 
-                full_dates = pd.date_range(start=dt_entrada, end=dt_hoje, freq="D")
-                num_pontos = len(full_dates)
+                    if metric_sel == "APR das Fees (%)":
+                        color_line = "#8b5cf6"
+                    elif metric_sel == "APR da Liquidez/PnL (%)":
+                        color_line = "#3b82f6"
+                    else:
+                        color_line = "#10b981"
 
-                if num_pontos == 1:
-                    sim_apr_fees = [apr_fees]
-                    sim_apr_liq = [apr_liquidez]
-                    sim_apr_tot = [apr_total]
-                else:
-                    dias_arr = np.arange(1, num_pontos + 1)
-                    prog_fees = np.linspace(0.1, total_fees_geradas, num_pontos)
-                    sim_apr_fees = (prog_fees / pool["valor_inicial"]) * (365 / dias_arr) * 100 if pool["valor_inicial"] > 0 else np.zeros(num_pontos)
-
-                    np.random.seed(pool["id"])
-                    ruido = np.cumsum(np.random.normal(0, 1.5, size=num_pontos))
-                    tendencia_val = np.linspace(pool["valor_inicial"], pool["valor_atual"], num_pontos)
-                    prog_liq = tendencia_val + (ruido - ruido[0])
-                    prog_liq[-1] = pool["valor_atual"]
-
-                    sim_apr_liq = ((prog_liq - pool["valor_inicial"]) / pool["valor_inicial"]) * (365 / dias_arr) * 100 if pool["valor_inicial"] > 0 else np.zeros(num_pontos)
-                    sim_apr_tot = sim_apr_fees + sim_apr_liq
-
-                df_apr = pd.DataFrame({
-                    "Data": full_dates.date,
-                    "APR das Fees (%)": sim_apr_fees,
-                    "APR da Liquidez/PnL (%)": sim_apr_liq,
-                    "APR Total (%)": sim_apr_tot
-                })
-
-                if metric_sel == "APR das Fees (%)":
-                    color_line = "#8b5cf6"
-                elif metric_sel == "APR da Liquidez/PnL (%)":
-                    color_line = "#3b82f6"
-                else:
-                    color_line = "#10b981"
-
-                fig = px.line(df_apr, x="Data", y=metric_sel, line_shape="spline", markers=True)
-                fig.update_traces(line_color=color_line, line_width=2.5)
-                fig.update_layout(
-                    template="plotly_dark",
-                    height=240,
-                    margin=dict(l=10, r=10, t=10, b=10),
-                    xaxis_title="",
-                    yaxis_title="",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                    fig_apr = px.line(df_metrics, x="Data", y=metric_sel, line_shape="spline", markers=True)
+                    fig_apr.update_traces(line_color=color_line, line_width=2.5)
+                    fig_apr.update_layout(
+                        template="plotly_dark",
+                        height=230,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        xaxis_title="",
+                        yaxis_title="",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)"
+                    )
+                    st.plotly_chart(fig_apr, use_container_width=True)
 
             st.markdown("---")
