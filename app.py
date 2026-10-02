@@ -1,6 +1,5 @@
 import datetime
 import json
-import sqlite3
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -15,224 +14,167 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
-# BASE DE DADOS SQLITE LOCAL PERSISTENTE
+# CONEXÃO COM SUPABASE VIA REST API (PERSISTÊNCIA GARANTIDA)
 # -------------------------------------------------------------
-DB_FILE = "pools_data.db"
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS pools (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            par TEXT,
-            rede TEXT,
-            estado TEXT,
-            valor_inicial REAL,
-            valor_atual REAL,
-            fees REAL DEFAULT 0,
-            range_min REAL DEFAULT 0,
-            range_max REAL DEFAULT 0,
-            data_entrada TEXT,
-            wallet_address TEXT DEFAULT ''
-        )
-    ''')
-
-    c.execute("PRAGMA table_info(pools)")
-    existing_cols = [col[1] for col in c.fetchall()]
-
-    if "fees" not in existing_cols:
-        c.execute("ALTER TABLE pools ADD COLUMN fees REAL DEFAULT 0")
-    if "range_min" not in existing_cols:
-        c.execute("ALTER TABLE pools ADD COLUMN range_min REAL DEFAULT 0")
-    if "range_max" not in existing_cols:
-        c.execute("ALTER TABLE pools ADD COLUMN range_max REAL DEFAULT 0")
-    if "wallet_address" not in existing_cols:
-        c.execute("ALTER TABLE pools ADD COLUMN wallet_address TEXT DEFAULT ''")
-
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS aportes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pool_id INTEGER,
-            valor REAL,
-            data_aporte TEXT,
-            FOREIGN KEY (pool_id) REFERENCES pools (id) ON DELETE CASCADE
-        )
-    ''')
-
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS saques (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pool_id INTEGER,
-            valor REAL,
-            data_saque TEXT,
-            FOREIGN KEY (pool_id) REFERENCES pools (id) ON DELETE CASCADE
-        )
-    ''')
-
-    conn.commit()
-
-    c.execute("SELECT COUNT(*) FROM pools")
-    if c.fetchone()[0] == 0:
-        c.execute('''
-            INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees, range_min, range_max, data_entrada, wallet_address)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', ("SOL/PUMP", "Raydium - SOLANA", "Ativa", 2203.0, 2800.62, 175.50, 19.469550, 30.933150, "2026-08-20", ""))
-        conn.commit()
-    conn.close()
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+}
 
 def load_pools():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id, par, rede, estado, valor_inicial, valor_atual, fees, range_min, range_max, data_entrada, wallet_address FROM pools ORDER BY id ASC")
-    rows = c.fetchall()
-    conn.close()
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.warning("Configura os Secrets (SUPABASE_URL e SUPABASE_KEY) para ativar a persistência na nuvem.")
+        return []
 
-    pools = []
-    for r in rows:
-        try:
-            dt_ent = datetime.datetime.strptime(str(r[9]), "%Y-%m-%d").date()
-        except Exception:
-            dt_ent = datetime.date.today()
+    url = f"{SUPABASE_URL}/rest/v1/pools?select=*&order=id.asc"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=6)
+        if res.status_code == 200:
+            data = res.json()
+            pools = []
+            for r in data:
+                try:
+                    dt_ent = datetime.datetime.strptime(str(r.get("data_entrada")), "%Y-%m-%d").date()
+                except Exception:
+                    dt_ent = datetime.date.today()
 
-        pools.append({
-            "id": int(r[0]),
-            "par": str(r[1] or "POOL/USD"),
-            "rede": str(r[2] or "DEX"),
-            "estado": str(r[3] or "Ativa"),
-            "valor_inicial": float(r[4] or 0),
-            "valor_atual": float(r[5] or 0),
-            "fees": float(r[6] or 0),
-            "range_min": float(r[7] or 0),
-            "range_max": float(r[8] or 0),
-            "data_entrada": dt_ent,
-            "wallet_address": str(r[10] or "")
-        })
-    return pools
+                pools.append({
+                    "id": int(r.get("id")),
+                    "par": str(r.get("par", "POOL/USD")),
+                    "rede": str(r.get("rede", "DEX")),
+                    "estado": str(r.get("estado", "Ativa")),
+                    "valor_inicial": float(r.get("valor_inicial", 0)),
+                    "valor_atual": float(r.get("valor_atual", 0)),
+                    "fees": float(r.get("fees", 0)),
+                    "range_min": float(r.get("range_min", 0)),
+                    "range_max": float(r.get("range_max", 0)),
+                    "data_entrada": dt_ent,
+                    "wallet_address": str(r.get("wallet_address", ""))
+                })
+            return pools
+    except Exception as e:
+        st.error(f"Erro ao carregar piscinas do Supabase: {e}")
+    return []
 
 def add_pool_db(par, rede, valor_inicial, valor_atual, fees, r_min, r_max, data_in, wallet_addr):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO pools (par, rede, estado, valor_inicial, valor_atual, fees, range_min, range_max, data_entrada, wallet_address)
-        VALUES (?, ?, 'Ativa', ?, ?, ?, ?, ?, ?, ?)
-    ''', (par, rede, valor_inicial, valor_atual, fees, r_min, r_max, data_in.strftime("%Y-%m-%d"), wallet_addr))
-    conn.commit()
-    conn.close()
+    url = f"{SUPABASE_URL}/rest/v1/pools"
+    payload = {
+        "par": par,
+        "rede": rede,
+        "estado": "Ativa",
+        "valor_inicial": valor_inicial,
+        "valor_atual": valor_atual,
+        "fees": fees,
+        "range_min": r_min,
+        "range_max": r_max,
+        "data_entrada": data_in.strftime("%Y-%m-%d"),
+        "wallet_address": wallet_addr
+    }
+    requests.post(url, headers=HEADERS, json=payload)
 
 def update_pool_db(pool_id, valor_atual, fees, data_entrada, wallet_addr="", r_min=None, r_max=None):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
+    url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+    payload = {
+        "valor_atual": valor_atual,
+        "fees": fees,
+        "data_entrada": data_entrada.strftime("%Y-%m-%d"),
+        "wallet_address": wallet_addr
+    }
     if r_min is not None and r_max is not None:
-        c.execute('''
-            UPDATE pools 
-            SET valor_atual = ?, fees = ?, data_entrada = ?, wallet_address = ?, range_min = ?, range_max = ?
-            WHERE id = ?
-        ''', (valor_atual, fees, data_entrada.strftime("%Y-%m-%d"), wallet_addr, r_min, r_max, int(pool_id)))
-    else:
-        c.execute('''
-            UPDATE pools 
-            SET valor_atual = ?, fees = ?, data_entrada = ?, wallet_address = ?
-            WHERE id = ?
-        ''', (valor_atual, fees, data_entrada.strftime("%Y-%m-%d"), wallet_addr, int(pool_id)))
-    conn.commit()
-    conn.close()
-
-def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO aportes (pool_id, valor, data_aporte)
-        VALUES (?, ?, ?)
-    ''', (int(pool_id), valor_aporte, data_aporte.strftime("%Y-%m-%d")))
-    c.execute('''
-        UPDATE pools 
-        SET valor_atual = valor_atual + ?, valor_inicial = valor_inicial + ?
-        WHERE id = ?
-    ''', (valor_aporte, valor_aporte, int(pool_id)))
-    conn.commit()
-    conn.close()
-
-def get_historico_aportes(pool_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('SELECT id, data_aporte, valor FROM aportes WHERE pool_id = ? ORDER BY id DESC', (int(pool_id),))
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-def delete_aporte_db(aporte_id, pool_id, valor_aporte):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM aportes WHERE id = ?", (int(aporte_id),))
-    c.execute('''
-        UPDATE pools 
-        SET valor_atual = MAX(0, valor_atual - ?), valor_inicial = MAX(0, valor_inicial - ?)
-        WHERE id = ?
-    ''', (valor_aporte, valor_aporte, int(pool_id)))
-    conn.commit()
-    conn.close()
-
-def registrar_saque_db(pool_id, valor_saque, data_saque):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO saques (pool_id, valor, data_saque)
-        VALUES (?, ?, ?)
-    ''', (int(pool_id), valor_saque, data_saque.strftime("%Y-%m-%d")))
-    c.execute('''
-        UPDATE pools 
-        SET fees = fees + ?
-        WHERE id = ?
-    ''', (valor_saque, int(pool_id)))
-    conn.commit()
-    conn.close()
-
-def get_historico_saques(pool_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('SELECT id, data_saque, valor FROM saques WHERE pool_id = ? ORDER BY id DESC', (int(pool_id),))
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-def delete_saque_db(saque_id, pool_id, valor_saque):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM saques WHERE id = ?", (int(saque_id),))
-    c.execute('''
-        UPDATE pools 
-        SET fees = MAX(0, fees - ?)
-        WHERE id = ?
-    ''', (valor_saque, int(pool_id)))
-    conn.commit()
-    conn.close()
+        payload["range_min"] = r_min
+        payload["range_max"] = r_max
+    requests.patch(url, headers=HEADERS, json=payload)
 
 def update_pool_status_db(pool_id, novo_estado):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("UPDATE pools SET estado = ? WHERE id = ?", (novo_estado, int(pool_id)))
-    conn.commit()
-    conn.close()
+    url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+    requests.patch(url, headers=HEADERS, json={"estado": novo_estado})
 
 def delete_pool_db(pool_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM pools WHERE id = ?", (int(pool_id),))
-    c.execute("DELETE FROM aportes WHERE pool_id = ?", (int(pool_id),))
-    c.execute("DELETE FROM saques WHERE pool_id = ?", (int(pool_id),))
-    conn.commit()
-    conn.close()
+    url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+    requests.delete(url, headers=HEADERS)
 
 def clear_all_pools_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM pools")
-    c.execute("DELETE FROM aportes")
-    c.execute("DELETE FROM saques")
-    conn.commit()
-    conn.close()
+    url = f"{SUPABASE_URL}/rest/v1/pools?id=gt.0"
+    requests.delete(url, headers=HEADERS)
+
+# APORTES E SAQUES (HISTÓRICO NO SUPABASE)
+def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
+    url_apt = f"{SUPABASE_URL}/rest/v1/aportes"
+    payload = {
+        "pool_id": pool_id,
+        "valor": valor_aporte,
+        "data_aporte": data_aporte.strftime("%Y-%m-%d")
+    }
+    requests.post(url_apt, headers=HEADERS, json=payload)
+
+    # Buscar pool atual para atualizar valores
+    pool = next((p for p in load_pools() if p["id"] == pool_id), None)
+    if pool:
+        n_v_init = pool["valor_inicial"] + valor_aporte
+        n_v_atual = pool["valor_atual"] + valor_aporte
+        url_p = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+        requests.patch(url_p, headers=HEADERS, json={"valor_inicial": n_v_init, "valor_atual": n_v_atual})
+
+def get_historico_aportes(pool_id):
+    url = f"{SUPABASE_URL}/rest/v1/aportes?pool_id=eq.{pool_id}&order=id.desc"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=6)
+        if res.status_code == 200:
+            return [(r["id"], r["data_aporte"], r["valor"]) for r in res.json()]
+    except Exception:
+        pass
+    return []
+
+def delete_aporte_db(aporte_id, pool_id, valor_aporte):
+    url_del = f"{SUPABASE_URL}/rest/v1/aportes?id=eq.{aporte_id}"
+    requests.delete(url_del, headers=HEADERS)
+
+    pool = next((p for p in load_pools() if p["id"] == pool_id), None)
+    if pool:
+        n_v_init = max(0.0, pool["valor_inicial"] - valor_aporte)
+        n_v_atual = max(0.0, pool["valor_atual"] - valor_aporte)
+        url_p = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+        requests.patch(url_p, headers=HEADERS, json={"valor_inicial": n_v_init, "valor_atual": n_v_atual})
+
+def registrar_saque_db(pool_id, valor_saque, data_saque):
+    url_sq = f"{SUPABASE_URL}/rest/v1/saques"
+    payload = {
+        "pool_id": pool_id,
+        "valor": valor_saque,
+        "data_saque": data_saque.strftime("%Y-%m-%d")
+    }
+    requests.post(url_sq, headers=HEADERS, json=payload)
+
+    pool = next((p for p in load_pools() if p["id"] == pool_id), None)
+    if pool:
+        n_fees = pool["fees"] + valor_saque
+        url_p = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+        requests.patch(url_p, headers=HEADERS, json={"fees": n_fees})
+
+def get_historico_saques(pool_id):
+    url = f"{SUPABASE_URL}/rest/v1/saques?pool_id=eq.{pool_id}&order=id.desc"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=6)
+        if res.status_code == 200:
+            return [(r["id"], r["data_saque"], r["valor"]) for r in res.json()]
+    except Exception:
+        pass
+    return []
+
+def delete_saque_db(saque_id, pool_id, valor_saque):
+    url_del = f"{SUPABASE_URL}/rest/v1/saques?id=eq.{saque_id}"
+    requests.delete(url_del, headers=HEADERS)
+
+    pool = next((p for p in load_pools() if p["id"] == pool_id), None)
+    if pool:
+        n_fees = max(0.0, pool["fees"] - valor_saque)
+        url_p = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+        requests.patch(url_p, headers=HEADERS, json={"fees": n_fees})
 
 # CONSULTA DE PREÇOS DEXSCREENER
 def fetch_dexscreener_price(position_nft_address):
@@ -254,9 +196,7 @@ def fetch_dexscreener_price(position_nft_address):
         pass
     return None, None
 
-init_db()
-
-# ESTILOS CSS ADAPTATIVOS PARA ECRÃS PEQUENOS E GRANDES
+# ESTILOS CSS ADAPTATIVOS
 st.markdown("""
     <style>
     .stApp {
@@ -294,26 +234,21 @@ st.markdown("""
         border-radius: 8px !important;
         font-weight: 500 !important;
     }
-    
-    /* REGRAS ANTI-CORTE DE TEXTO NAS MÉTRICAS */
     [data-testid="stMetricValue"] {
         font-size: calc(1.0rem + 0.35vw) !important;
         line-height: 1.2 !important;
         white-space: nowrap !important;
-        overflow: visible !important;
-        text-overflow: clip !important;
     }
     [data-testid="stMetricLabel"] {
         font-size: 0.78rem !important;
         white-space: nowrap !important;
-        margin-bottom: -2px !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # HEADER
 st.title("⚡ Gestor de Piscinas de Liquidez")
-st.caption("Acompanhamento de performance e gestão DeFi")
+st.caption("Acompanhamento de performance e gestão DeFi (Persistência Cloud Activa)")
 
 pools_data = load_pools()
 
@@ -383,7 +318,7 @@ def modal_sincronizar_carteira(pool_id, price_usd=None, price_native=None):
                 valor_final = v_manual if v_manual > 0 else pool["valor_inicial"]
                 data_ent = pool.get("data_entrada", datetime.date.today())
                 update_pool_db(pool_id, valor_final, f_manual, data_ent, novo_end, r_min=r_min_modal, r_max=r_max_modal)
-                st.success("Dados atualizados!")
+                st.success("Dados atualizados na nuvem!")
                 st.rerun()
 
 @st.dialog("➕ Gestão de Aportes")
@@ -397,7 +332,7 @@ def modal_gerir_aportes(pool_id):
                 dt_aporte = st.date_input("Data do Aporte:", datetime.date.today())
                 if st.form_submit_button("Confirmar Aporte", type="primary", use_container_width=True):
                     registrar_aporte_db(pool_id, v_aporte, dt_aporte)
-                    st.success("Aporte guardado!")
+                    st.success("Aporte guardado no Supabase!")
                     st.rerun()
         with tab_hist:
             historico = get_historico_aportes(pool_id)
@@ -423,7 +358,7 @@ def modal_gerir_saques(pool_id):
                 dt_saque = st.date_input("Data do Saque:", datetime.date.today())
                 if st.form_submit_button("Confirmar Saque", type="primary", use_container_width=True):
                     registrar_saque_db(pool_id, v_saque, dt_saque)
-                    st.success("Saque guardado!")
+                    st.success("Saque guardado no Supabase!")
                     st.rerun()
         with tab_hist:
             historico = get_historico_saques(pool_id)
@@ -476,7 +411,7 @@ with st.sidebar:
             nome_rede = f"{dex} - {rede if rede else 'Rede'}"
             v_actual_calc = v_atual if v_atual > 0 else v_init
             add_pool_db(nome_par, nome_rede, float(v_init), float(v_actual_calc), float(fees_in), float(r_min), float(r_max), data_in, wallet_addr)
-            st.success("Pool gravada!")
+            st.success("Pool gravada no Supabase!")
             st.rerun()
 
     st.markdown("---")
@@ -531,7 +466,6 @@ else:
         apr_total = (pnl_valor / pool["valor_inicial"]) * (365 / dias_totais) * 100 if pool["valor_inicial"] > 0 else 0
 
         with st.container():
-            # PROPORÇÕES AJUSTADAS (40% PARA O TÍTULO, 60% DISTRIBUÍDO PARA MÉTRICAS SEM CORTES)
             head_col1, head_col2 = st.columns([1.5, 3.5])
             with head_col1:
                 badge_class = "badge-ativa" if pool["estado"] == "Ativa" else "badge-fechada"
