@@ -353,7 +353,7 @@ def modal_gerir_aportes(pool_id):
             historico = get_historico_aportes(pool_id)
             total_aportado = sum(val for _, _, val in historico)
             
-            st.metric("Total Aportado Neta Pool", f"${total_aportado:,.2f}")
+            st.metric("Total Aportado Nesta Pool", f"${total_aportado:,.2f}")
             st.markdown("---")
 
             if not historico:
@@ -548,7 +548,7 @@ else:
 
             if st.session_state[show_chart_key]:
                 tab_il_vs_fees, tab_apr_perc = st.tabs([
-                    "⚖️ Fees vs. Impermanent Loss / PnL ($)", 
+                    "秤 Fees vs. Impermanent Loss / PnL ($)", 
                     "📊 Percentuais de APR (%)"
                 ])
 
