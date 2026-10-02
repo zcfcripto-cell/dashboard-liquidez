@@ -351,6 +351,11 @@ def modal_gerir_aportes(pool_id):
                     st.rerun()
         with tab_hist:
             historico = get_historico_aportes(pool_id)
+            total_aportado = sum(val for _, _, val in historico)
+            
+            st.metric("Total Aportado Neta Pool", f"${total_aportado:,.2f}")
+            st.markdown("---")
+
             if not historico:
                 st.info("Nenhum aporte registado.")
             else:
