@@ -87,7 +87,7 @@ def add_pool_db(par, rede, valor_inicial, valor_atual, fees, r_min, r_max, data_
     except Exception as e:
         return False, f"Erro de conexão: {str(e)}"
 
-def update_pool_db(pool_id, valor_atual, fees, data_entrada, wallet_addr="", r_min=None, r_max=None):
+def update_pool_db(pool_id, valor_atual, fees, data_entrada, valor_inicial=None, wallet_addr="", r_min=None, r_max=None):
     url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
     payload = {
         "valor_atual": valor_atual,
@@ -95,6 +95,8 @@ def update_pool_db(pool_id, valor_atual, fees, data_entrada, wallet_addr="", r_m
         "data_entrada": data_entrada.strftime("%Y-%m-%d"),
         "wallet_address": wallet_addr
     }
+    if valor_inicial is not None:
+        payload["valor_inicial"] = valor_inicial
     if r_min is not None and r_max is not None:
         payload["range_min"] = r_min
         payload["range_max"] = r_max
@@ -328,7 +330,7 @@ def modal_sincronizar_carteira(pool_id, price_usd=None, price_native=None):
             if sub:
                 valor_final = v_manual if v_manual > 0 else pool["valor_inicial"]
                 data_ent = pool.get("data_entrada", datetime.date.today())
-                if update_pool_db(pool_id, valor_final, f_manual, data_ent, novo_end, r_min=r_min_modal, r_max=r_max_modal):
+                if update_pool_db(pool_id, valor_final, f_manual, data_ent, wallet_addr=novo_end, r_min=r_min_modal, r_max=r_max_modal):
                     st.success("Dados atualizados na nuvem!")
                     st.rerun()
                 else:
@@ -391,6 +393,7 @@ def modal_atualizar_pool(pool_id):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
     if pool is not None:
         with st.form(key=f"form_edit_modal_{pool_id}"):
+            novo_v_init = st.number_input("Valor Inicial ($ USD)", min_value=0.0, value=float(pool["valor_inicial"]), step=10.0)
             novo_v_atual = st.number_input("Valor Atual ($ USD)", min_value=0.0, value=float(pool["valor_atual"]), step=10.0)
             novas_fees = st.number_input("Total Fees ($ USD)", min_value=0.0, value=float(pool["fees"]), step=0.5)
             end_c = st.text_input("Position Address", value=pool.get("wallet_address", ""))
@@ -399,8 +402,8 @@ def modal_atualizar_pool(pool_id):
             novo_r_max = col_r2.number_input("Range Máx", value=float(pool["range_max"]), format="%.6f", step=0.000001)
             nova_dt = st.date_input("Data Entrada", value=pool["data_entrada"])
             if st.form_submit_button("Guardar Alterações", type="primary", use_container_width=True):
-                if update_pool_db(pool_id, novo_v_atual, novas_fees, nova_dt, end_c, r_min=novo_r_min, r_max=novo_r_max):
-                    st.success("Alterações salvas!")
+                if update_pool_db(pool_id, novo_v_atual, novas_fees, nova_dt, valor_inicial=novo_v_init, wallet_addr=end_c, r_min=novo_r_min, r_max=novo_r_max):
+                    st.success("Alterações salvas no Supabase!")
                     st.rerun()
                 else:
                     st.error("Erro ao guardar as alterações no Supabase.")
