@@ -58,6 +58,7 @@ def load_pools():
                     "data_entrada": dt_ent,
                     "wallet_address": str(r.get("wallet_address", "")),
                     "preco_atual": float(r.get("preco_atual", 0.0) or 0.0),
+                    "preco_nativo": float(r.get("preco_nativo", 0.0) or 0.0),
                     "horas_inativa": float(r.get("horas_inativa", 0.0) or 0.0),
                     "last_price_update": float(r.get("last_price_update", 0.0) or 0.0)
                 })
@@ -82,6 +83,7 @@ def add_pool_db(par, rede, valor_inicial, valor_atual, fees, r_min, r_max, data_
         "data_entrada": data_in.strftime("%Y-%m-%d"),
         "wallet_address": wallet_addr,
         "preco_atual": 0.0,
+        "preco_nativo": 0.0,
         "horas_inativa": 0.0,
         "last_price_update": time.time()
     }
@@ -94,7 +96,7 @@ def add_pool_db(par, rede, valor_inicial, valor_atual, fees, r_min, r_max, data_
     except Exception as e:
         return False, f"Erro de conexão: {str(e)}"
 
-def update_pool_db(pool_id, valor_atual, fees, data_entrada, valor_inicial=None, wallet_addr="", r_min=None, r_max=None, preco_atual=None, estado=None, horas_inativa=None, last_update=None):
+def update_pool_db(pool_id, valor_atual, fees, data_entrada, valor_inicial=None, wallet_addr="", r_min=None, r_max=None, preco_atual=None, preco_nativo=None, estado=None, horas_inativa=None, last_update=None):
     url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
     payload = {
         "valor_atual": valor_atual,
@@ -109,6 +111,8 @@ def update_pool_db(pool_id, valor_atual, fees, data_entrada, valor_inicial=None,
         payload["range_max"] = r_max
     if preco_atual is not None:
         payload["preco_atual"] = preco_atual
+    if preco_nativo is not None:
+        payload["preco_nativo"] = preco_nativo
     if estado is not None:
         payload["estado"] = estado
     if horas_inativa is not None:
@@ -225,7 +229,7 @@ def fetch_dexscreener_pair_price(pair_address):
         pass
     return None, None
 
-# VERIFICAÇÃO AUTOMÁTICA DE PREÇOS E ESTADO (INTERVALO DE 1 HORA)
+# VERIFICAÇÃO AUTOMÁTICA DE PREÇOS E ESTADO PELO PREÇO NATIVO DO PAR
 def sync_pool_price_and_range(pool, force_sync=False):
     now = time.time()
     last_update = pool.get("last_price_update", 0.0)
@@ -233,16 +237,16 @@ def sync_pool_price_and_range(pool, force_sync=False):
 
     if force_sync or elapsed_hours >= 1.0:
         p_usd, p_nat = fetch_dexscreener_pair_price(pool.get("wallet_address", ""))
-        if p_usd is not None and p_usd > 0:
+        if p_nat is not None and p_nat > 0:
             r_min = pool["range_min"]
             r_max = pool["range_max"]
             
-            # Verifica se está no range
+            # Validação pelo PREÇO NATIVO do Par (ex: 0.00005309 SOL/PUMP)
             in_range = True
             if r_min > 0 or r_max > 0:
-                if r_min > 0 and p_usd < r_min:
+                if r_min > 0 and p_nat < r_min:
                     in_range = False
-                if r_max > 0 and p_usd > r_max:
+                if r_max > 0 and p_nat > r_max:
                     in_range = False
             
             novo_estado = "Ativa" if in_range else "Inativa"
@@ -258,12 +262,13 @@ def sync_pool_price_and_range(pool, force_sync=False):
                 data_entrada=pool["data_entrada"],
                 wallet_addr=pool["wallet_address"],
                 preco_atual=p_usd,
+                preco_nativo=p_nat,
                 estado=novo_estado,
                 horas_inativa=novas_horas_inativa,
                 last_update=now
             )
             return p_usd, p_nat, novo_estado
-    return pool.get("preco_atual", 0.0), None, pool.get("estado", "Ativa")
+    return pool.get("preco_atual", 0.0), pool.get("preco_nativo", 0.0), pool.get("estado", "Ativa")
 
 # ESTILOS CSS
 st.markdown("""
@@ -319,7 +324,7 @@ def modal_tabela_resumo_historico():
             "Par de Ativos": p["par"],
             "Plataforma / Rede": p["rede"],
             "Estado": p["estado"],
-            "Preço Atual ($)": f"${p.get('preco_atual', 0.0):.6f}",
+            "Preço Nativo": f"{p.get('preco_nativo', 0.0):.8f}",
             "Valor Inicial": f"${v_init:,.2f}",
             "Valor Atual": f"${v_atual:,.2f}",
             "Fees Acumuladas": f"${fees:,.2f}",
@@ -337,8 +342,8 @@ def modal_sincronizar_carteira(pool_id):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
     if pool is not None:
         p_usd, p_nat, estado_range = sync_pool_price_and_range(pool, force_sync=True)
-        if p_usd and p_usd > 0:
-            st.info(f"💡 Cotação Atual no DexScreener: **${p_usd:.6f} USD** | Estado Calculado pelo Range: **{estado_range}**")
+        if p_nat and p_nat > 0:
+            st.info(f"💡 Cotação Nativa no DexScreener: **{p_nat:.8f}** (${p_usd:.6f} USD) | Estado pelo Range: **{estado_range}**")
 
         val_default = float(pool["valor_atual"]) if pool["valor_atual"] > 0 else float(pool["valor_inicial"])
 
@@ -347,8 +352,8 @@ def modal_sincronizar_carteira(pool_id):
             v_manual = st.number_input("Valor Atual da Pool ($ USD):", min_value=0.0, value=val_default, step=10.0)
             f_manual = st.number_input("Fees Acumuladas Totais ($ USD):", min_value=0.0, value=float(pool["fees"]), step=0.5)
             col_r1, col_r2 = st.columns(2)
-            r_min_modal = col_r1.number_input("Range Mín", value=float(pool["range_min"]), format="%.6f", step=0.000001)
-            r_max_modal = col_r2.number_input("Range Máx", value=float(pool["range_max"]), format="%.6f", step=0.000001)
+            r_min_modal = col_r1.number_input("Range Mín (Preço Nativo)", value=float(pool["range_min"]), format="%.8f", step=0.00000001)
+            r_max_modal = col_r2.number_input("Range Máx (Preço Nativo)", value=float(pool["range_max"]), format="%.8f", step=0.00000001)
 
             sub = st.form_submit_button("Sincronizar e Guardar", type="primary", use_container_width=True)
             if sub:
@@ -423,8 +428,8 @@ def modal_atualizar_pool(pool_id):
             novas_fees = st.number_input("Total Fees ($ USD)", min_value=0.0, value=float(pool["fees"]), step=0.5)
             end_c = st.text_input("Morada do Par (DexScreener)", value=pool.get("wallet_address", ""))
             col_r1, col_r2 = st.columns(2)
-            novo_r_min = col_r1.number_input("Range Mín", value=float(pool["range_min"]), format="%.6f", step=0.000001)
-            novo_r_max = col_r2.number_input("Range Máx", value=float(pool["range_max"]), format="%.6f", step=0.000001)
+            novo_r_min = col_r1.number_input("Range Mín (Preço Nativo)", value=float(pool["range_min"]), format="%.8f", step=0.00000001)
+            novo_r_max = col_r2.number_input("Range Máx (Preço Nativo)", value=float(pool["range_max"]), format="%.8f", step=0.00000001)
             nova_dt = st.date_input("Data Entrada", value=pool["data_entrada"])
             if st.form_submit_button("Guardar Alterações", type="primary", use_container_width=True):
                 if update_pool_db(pool_id, novo_v_atual, novas_fees, nova_dt, valor_inicial=novo_v_init, wallet_addr=end_c, r_min=novo_r_min, r_max=novo_r_max):
@@ -443,8 +448,8 @@ with st.sidebar:
         fees_in = st.number_input("Fees Pendentes ($)", min_value=0.0)
         wallet_addr = st.text_input("Morada do Par (DexScreener)")
         col_r1, col_r2 = st.columns(2)
-        r_min = col_r1.number_input("Range Mín", format="%.6f", step=0.000001)
-        r_max = col_r2.number_input("Range Máx", format="%.6f", step=0.000001)
+        r_min = col_r1.number_input("Range Mín (Nativo)", format="%.8f", step=0.00000001)
+        r_max = col_r2.number_input("Range Máx (Nativo)", format="%.8f", step=0.00000001)
         data_in = st.date_input("Data Entrada", datetime.date.today())
 
         if st.form_submit_button("Adicionar Pool", type="primary"):
@@ -523,10 +528,10 @@ else:
             head_col1, head_col2 = st.columns([1.5, 3.5])
             with head_col1:
                 badge_class = "badge-ativa" if pool["estado"] == "Ativa" else "badge-inativa"
-                p_atual_str = f" | Preço: ${pool.get('preco_atual', 0.0):.6f}" if pool.get('preco_atual', 0.0) > 0 else ""
+                p_nat_str = f" | Preço Nativo: {pool.get('preco_nativo', 0.0):.8f}" if pool.get('preco_nativo', 0.0) > 0 else ""
                 st.markdown(f"### 🪙 **Pool #{idx}: {pool['par']}** <span class='{badge_class}'>{pool['estado']}</span>", unsafe_allow_html=True)
-                st.caption(f"DEX / Rede: {pool['rede']} | Investido: ${pool['valor_inicial']:,.2f}{p_atual_str}")
-                st.caption(f"⏱️ **Tempo Ativa:** {dias_ativa:.1f} dias | **Tempo Inativa:** {dias_inativa:.1f} dias ({horas_inativa_totais:.0f}h)")
+                st.caption(f"DEX / Rede: {pool['rede']} | Investido: ${pool['valor_inicial']:,.2f}{p_nat_str}")
+                st.caption(f"⏱️️ **Tempo Ativa:** {dias_ativa:.1f} dias | **Tempo Inativa:** {dias_inativa:.1f} dias ({horas_inativa_totais:.0f}h)")
 
             with head_col2:
                 m1, m2, m3, m4, m5 = st.columns([1, 1, 1, 1, 1])
@@ -537,7 +542,7 @@ else:
                 m5.metric("Fees", f"${pool['fees']:,.2f}")
 
             col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
-            if col_b1.button("✏️️ Editar", key=f"edit_{pool['id']}", use_container_width=True):
+            if col_b1.button("✏ Editar", key=f"edit_{pool['id']}", use_container_width=True):
                 modal_atualizar_pool(pool["id"])
 
             if col_b2.button("🔗 Sincronizar", key=f"sync_{pool['id']}", use_container_width=True):
