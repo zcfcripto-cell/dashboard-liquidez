@@ -359,8 +359,8 @@ def modal_sincronizar_carteira(pool_id):
             if sub:
                 valor_final = v_manual if v_manual > 0 else pool["valor_inicial"]
                 data_ent = pool.get("data_entrada", datetime.date.today())
-                if update_pool_db(pool_id, valor_final, f_manual, data_ent, wallet_addr=novo_end, r_min=r_min_modal, r_max=r_max_modal):
-                    st.success("Sincronizado com sucesso!")
+                if update_pool_db(pool_id, valor_final, f_manual, data_ent, wallet_addr=novo_end, r_min=r_min_modal, r_max=r_max_modal, estado=estado_range):
+                    st.success("Sincronizado e estado atualizado com sucesso!")
                     st.rerun()
 
 @st.dialog("➕ Gestão de Aportes")
@@ -527,11 +527,11 @@ else:
         with st.container():
             head_col1, head_col2 = st.columns([1.5, 3.5])
             with head_col1:
-                badge_class = "badge-ativa" if pool["estado"] == "Ativa" else "badge-inativa"
+                badge_class = "badge-ativa" if pool["estado"].lower() == "ativa" else "badge-inativa"
                 p_nat_str = f" | Preço Nativo: {pool.get('preco_nativo', 0.0):.8f}" if pool.get('preco_nativo', 0.0) > 0 else ""
                 st.markdown(f"### 🪙 **Pool #{idx}: {pool['par']}** <span class='{badge_class}'>{pool['estado']}</span>", unsafe_allow_html=True)
                 st.caption(f"DEX / Rede: {pool['rede']} | Investido: ${pool['valor_inicial']:,.2f}{p_nat_str}")
-                st.caption(f"⏱️️ **Tempo Ativa:** {dias_ativa:.1f} dias | **Tempo Inativa:** {dias_inativa:.1f} dias ({horas_inativa_totais:.0f}h)")
+                st.caption(f"⏱ **Tempo Ativa:** {dias_ativa:.1f} dias | **Tempo Inativa:** {dias_inativa:.1f} dias ({horas_inativa_totais:.0f}h)")
 
             with head_col2:
                 m1, m2, m3, m4, m5 = st.columns([1, 1, 1, 1, 1])
@@ -542,7 +542,7 @@ else:
                 m5.metric("Fees", f"${pool['fees']:,.2f}")
 
             col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
-            if col_b1.button("✏ Editar", key=f"edit_{pool['id']}", use_container_width=True):
+            if col_b1.button("✏ Edit", key=f"edit_{pool['id']}", use_container_width=True):
                 modal_atualizar_pool(pool["id"])
 
             if col_b2.button("🔗 Sincronizar", key=f"sync_{pool['id']}", use_container_width=True):
