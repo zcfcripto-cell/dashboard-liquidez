@@ -212,10 +212,10 @@ def delete_saque_db(saque_id, pool_id, valor_saque):
 # CONSULTA DE PREÇOS DEXSCREENER POR PAIR ADDRESS
 def fetch_dexscreener_pair_price(pair_address):
     if not pair_address or not isinstance(pair_address, str):
-        return None, None
+        return None, None, None
     clean_addr = pair_address.strip()
     if not clean_addr:
-        return None, None
+        return None, None, None
     url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{clean_addr}"
     try:
         res = requests.get(url, timeout=6)
@@ -224,10 +224,10 @@ def fetch_dexscreener_pair_price(pair_address):
             if data and "pair" in data and data["pair"]:
                 price_usd = float(data["pair"].get("priceUsd", 0))
                 price_native = float(data["pair"].get("priceNative", 0))
-                return price_usd, price_native
+                return price_usd, price_native, "Ativa"
     except Exception:
         pass
-    return None, None
+    return None, None, None
 
 # VERIFICAÇÃO AUTOMÁTICA DE PREÇOS E RANGE
 def sync_pool_price_and_range(pool, force_sync=False):
@@ -236,13 +236,12 @@ def sync_pool_price_and_range(pool, force_sync=False):
     elapsed_hours = (now - last_update) / 3600.0 if last_update > 0 else 1.0
 
     if force_sync or elapsed_hours >= 1.0:
-        p_usd, p_nat = fetch_dexscreener_pair_price(pool.get("wallet_address", ""))
+        p_usd, p_nat, _ = fetch_dexscreener_pair_price(pool.get("wallet_address", ""))
         
         if p_nat is not None and p_nat > 0:
             r_min = pool["range_min"]
             r_max = pool["range_max"]
             
-            # Validação pelo PREÇO NATIVO do Par
             in_range = True
             if r_min > 0 or r_max > 0:
                 if r_min > 0 and p_nat < r_min:
@@ -289,7 +288,6 @@ st.caption("Acompanhamento de performance e gestão DeFi (Persistência Cloud Ac
 
 pools_data = load_pools()
 
-# Auto-sincronização por hora ao carregar a página
 for p in pools_data:
     sync_pool_price_and_range(p, force_sync=False)
 
@@ -337,49 +335,69 @@ def modal_tabela_resumo_historico():
     df_geral = pd.DataFrame(resumo_rows)
     st.dataframe(df_geral, use_container_width=True, hide_index=True)
 
-# MODAIS DE OPERAÇÃO
+# MODAL DE SINCRONIZAÇÃO
 @st.dialog("🔄 Sincronização On-Chain (DexScreener)")
 def modal_sincronizar_carteira(pool_id):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
     if pool is not None:
-        p_usd, p_nat, estado_range = sync_pool_price_and_range(pool, force_sync=True)
+        p_usd, p_nat, _ = fetch_dexscreener_pair_price(pool.get("wallet_address", ""))
         
-        # Recalcula o valor atual sugerido com base na variação do preço nativo
+        if p_usd is None or p_usd == 0:
+            p_usd = pool.get("preco_atual", 0.0)
+            p_nat = pool.get("preco_nativo", 0.0)
+            estado_range = pool.get("estado", "Ativa")
+        else:
+            r_min = pool.get("range_min", 0.0)
+            r_max = pool.get("range_max", 0.0)
+            in_range = True
+            if r_min > 0 and p_nat < r_min:
+                in_range = False
+            if r_max > 0 and p_nat > r_max:
+                in_range = False
+            estado_range = "Ativa" if in_range else "Inativa"
+
         preco_ref = pool.get("preco_nativo", 0.0)
         valor_calculado = float(pool["valor_atual"])
 
-        if p_nat and p_nat > 0:
-            if preco_ref and preco_ref > 0:
-                razao_preco = p_nat / preco_ref
-                valor_calculado = round(pool["valor_atual"] * (razao_preco ** 0.5), 2)
-            st.info(f"💡 Cotação Nativa no DexScreener: **{p_nat:.8f}** (${p_usd:.6f} USD) | Estado pelo Range: **{estado_range}**")
+        if p_nat and p_nat > 0 and preco_ref and preco_ref > 0:
+            razao_preco = p_nat / preco_ref
+            valor_calculado = round(pool["valor_atual"] * (razao_preco ** 0.5), 2)
 
-        with st.form(key=f"form_sync_{pool_id}"):
-            novo_end = st.text_input("Morada do Par / Pair Address (DexScreener):", value=pool.get("wallet_address", ""))
-            v_manual = st.number_input("Valor Atual da Pool ($ USD) [Sugerido/Auto]:", min_value=0.0, value=float(valor_calculado), step=1.0)
-            f_manual = st.number_input("Fees Acumuladas Totais ($ USD):", min_value=0.0, value=float(pool["fees"]), step=0.5)
-            col_r1, col_r2 = st.columns(2)
-            r_min_modal = col_r1.number_input("Range Mín (Preço Nativo)", value=float(pool["range_min"]), format="%.8f", step=0.00000001)
-            r_max_modal = col_r2.number_input("Range Máx (Preço Nativo)", value=float(pool["range_max"]), format="%.8f", step=0.00000001)
+        st.info(f"💡 Cotação Nativa no DexScreener: **{p_nat:.8f}** (${p_usd:.6f} USD) | Estado pelo Range: **{estado_range}**")
 
-            sub = st.form_submit_button("Sincronizar e Guardar", type="primary", use_container_width=True)
-            if sub:
-                data_ent = pool.get("data_entrada", datetime.date.today())
-                if update_pool_db(
-                    pool_id, 
-                    v_manual, 
-                    f_manual, 
-                    data_ent, 
-                    wallet_addr=novo_end, 
-                    r_min=r_min_modal, 
-                    r_max=r_max_modal, 
-                    preco_atual=p_usd,
-                    preco_nativo=p_nat,
-                    estado=estado_range,
-                    last_update=time.time()
-                ):
-                    st.success("Sincronizado e estado atualizado com sucesso!")
-                    st.rerun()
+        novo_end = st.text_input("Morada do Par / Pair Address (DexScreener):", value=pool.get("wallet_address", ""), key=f"inp_addr_{pool_id}")
+        v_manual = st.number_input("Valor Atual da Pool ($ USD) [Sugerido/Auto]:", min_value=0.0, value=float(valor_calculado), step=1.0, key=f"inp_val_{pool_id}")
+        f_manual = st.number_input("Fees Acumuladas Totais ($ USD):", min_value=0.0, value=float(pool["fees"]), step=0.5, key=f"inp_fees_{pool_id}")
+        
+        col_r1, col_r2 = st.columns(2)
+        r_min_modal = col_r1.number_input("Range Mín (Preço Nativo)", value=float(pool["range_min"]), format="%.8f", step=0.00000001, key=f"inp_rmin_{pool_id}")
+        r_max_modal = col_r2.number_input("Range Máx (Preço Nativo)", value=float(pool["range_max"]), format="%.8f", step=0.00000001, key=f"inp_rmax_{pool_id}")
+
+        st.markdown("---")
+        
+        if st.button("Sincronizar e Guardar", type="primary", use_container_width=True, key=f"btn_save_sync_{pool_id}"):
+            dt_ent = pool.get("data_entrada", datetime.date.today())
+            
+            sucesso = update_pool_db(
+                pool_id, 
+                v_manual, 
+                f_manual, 
+                dt_ent, 
+                wallet_addr=novo_end, 
+                r_min=r_min_modal, 
+                r_max=r_max_modal, 
+                preco_atual=p_usd,
+                preco_nativo=p_nat,
+                estado=estado_range,
+                last_update=time.time()
+            )
+            
+            if sucesso:
+                st.toast("✅ Dados guardados com sucesso!", icon="🎉")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("❌ Falha ao comunicar com o Supabase. Verifica os Secrets e a ligação.")
 
 @st.dialog("➕ Gestão de Aportes")
 def modal_gerir_aportes(pool_id):
@@ -528,7 +546,6 @@ else:
         dt_entrada = pool.get("data_entrada", datetime.date.today())
         dias_totais = max(1, (dt_hoje - dt_entrada).days)
 
-        # Cálculo de tempo Ativa vs. Inativa
         horas_inativa_totais = pool.get("horas_inativa", 0.0)
         dias_inativa = horas_inativa_totais / 24.0
         dias_ativa = max(0.0, dias_totais - dias_inativa)
@@ -581,7 +598,6 @@ else:
                         delete_pool_db(pool["id"])
                         st.rerun()
 
-            # GRÁFICOS INTERATIVOS
             show_chart_key = f"show_chart_{pool['id']}"
             if show_chart_key not in st.session_state:
                 st.session_state[show_chart_key] = True
@@ -633,7 +649,6 @@ else:
                     "APR Total (%)": sim_apr_tot
                 })
 
-                # ABA 1: GRÁFICO COMPARATIVO FEES VS IL / PNL ($)
                 with tab_il_vs_fees:
                     fig_comp = go.Figure()
                     fig_comp.add_trace(go.Scatter(
@@ -662,7 +677,6 @@ else:
                     )
                     st.plotly_chart(fig_comp, use_container_width=True)
 
-                # ABA 2: GRÁFICO SELETOR DE APR (%)
                 with tab_apr_perc:
                     metric_sel = st.radio(
                         "Selecione o APR a Visualizar:",
