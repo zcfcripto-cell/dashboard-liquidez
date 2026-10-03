@@ -229,7 +229,7 @@ def fetch_dexscreener_pair_price(pair_address):
         pass
     return None, None
 
-# VERIFICAÇÃO AUTOMÁTICA DE PREÇOS, RANGE E VALOR ATUAL
+# VERIFICAÇÃO AUTOMÁTICA DE PREÇOS E RANGE
 def sync_pool_price_and_range(pool, force_sync=False):
     now = time.time()
     last_update = pool.get("last_price_update", 0.0)
@@ -237,14 +237,7 @@ def sync_pool_price_and_range(pool, force_sync=False):
 
     if force_sync or elapsed_hours >= 1.0:
         p_usd, p_nat = fetch_dexscreener_pair_price(pool.get("wallet_address", ""))
-        novo_valor_atual = pool["valor_atual"]
-
-        # Se houver preço nativo válido, recalcula o valor atual proporcionalmente à variação do preço
-        preco_anterior = pool.get("preco_nativo", 0.0)
-        if p_nat and p_nat > 0 and preco_anterior and preco_anterior > 0:
-            var_preco = p_nat / preco_anterior
-            novo_valor_atual = round(pool["valor_atual"] * var_preco, 2)
-
+        
         if p_nat is not None and p_nat > 0:
             r_min = pool["range_min"]
             r_max = pool["range_max"]
@@ -265,7 +258,7 @@ def sync_pool_price_and_range(pool, force_sync=False):
 
             update_pool_db(
                 pool["id"], 
-                valor_atual=novo_valor_atual, 
+                valor_atual=pool["valor_atual"], 
                 fees=pool["fees"], 
                 data_entrada=pool["data_entrada"],
                 wallet_addr=pool["wallet_address"],
@@ -350,14 +343,20 @@ def modal_sincronizar_carteira(pool_id):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
     if pool is not None:
         p_usd, p_nat, estado_range = sync_pool_price_and_range(pool, force_sync=True)
-        if p_nat and p_nat > 0:
-            st.info(f"💡 Cotação Nativa no DexScreener: **{p_nat:.8f}** (${p_usd:.6f} USD) | Estado pelo Range: **{estado_range}**")
+        
+        # Recalcula o valor atual sugerido com base na variação do preço nativo
+        preco_ref = pool.get("preco_nativo", 0.0)
+        valor_calculado = float(pool["valor_atual"])
 
-        val_default = float(pool["valor_atual"]) if pool["valor_atual"] > 0 else float(pool["valor_inicial"])
+        if p_nat and p_nat > 0:
+            if preco_ref and preco_ref > 0:
+                razao_preco = p_nat / preco_ref
+                valor_calculado = round(pool["valor_atual"] * (razao_preco ** 0.5), 2)
+            st.info(f"💡 Cotação Nativa no DexScreener: **{p_nat:.8f}** (${p_usd:.6f} USD) | Estado pelo Range: **{estado_range}**")
 
         with st.form(key=f"form_sync_{pool_id}"):
             novo_end = st.text_input("Morada do Par / Pair Address (DexScreener):", value=pool.get("wallet_address", ""))
-            v_manual = st.number_input("Valor Atual da Pool ($ USD):", min_value=0.0, value=val_default, step=10.0)
+            v_manual = st.number_input("Valor Atual da Pool ($ USD) [Sugerido/Auto]:", min_value=0.0, value=float(valor_calculado), step=1.0)
             f_manual = st.number_input("Fees Acumuladas Totais ($ USD):", min_value=0.0, value=float(pool["fees"]), step=0.5)
             col_r1, col_r2 = st.columns(2)
             r_min_modal = col_r1.number_input("Range Mín (Preço Nativo)", value=float(pool["range_min"]), format="%.8f", step=0.00000001)
@@ -365,9 +364,20 @@ def modal_sincronizar_carteira(pool_id):
 
             sub = st.form_submit_button("Sincronizar e Guardar", type="primary", use_container_width=True)
             if sub:
-                valor_final = v_manual if v_manual > 0 else pool["valor_inicial"]
                 data_ent = pool.get("data_entrada", datetime.date.today())
-                if update_pool_db(pool_id, valor_final, f_manual, data_ent, wallet_addr=novo_end, r_min=r_min_modal, r_max=r_max_modal, estado=estado_range):
+                if update_pool_db(
+                    pool_id, 
+                    v_manual, 
+                    f_manual, 
+                    data_ent, 
+                    wallet_addr=novo_end, 
+                    r_min=r_min_modal, 
+                    r_max=r_max_modal, 
+                    preco_atual=p_usd,
+                    preco_nativo=p_nat,
+                    estado=estado_range,
+                    last_update=time.time()
+                ):
                     st.success("Sincronizado e estado atualizado com sucesso!")
                     st.rerun()
 
