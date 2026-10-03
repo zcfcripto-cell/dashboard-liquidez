@@ -1,5 +1,6 @@
 import datetime
 import json
+import time
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -55,7 +56,10 @@ def load_pools():
                     "range_min": float(r.get("range_min", 0)),
                     "range_max": float(r.get("range_max", 0)),
                     "data_entrada": dt_ent,
-                    "wallet_address": str(r.get("wallet_address", ""))
+                    "wallet_address": str(r.get("wallet_address", "")),
+                    "preco_atual": float(r.get("preco_atual", 0.0) or 0.0),
+                    "horas_inativa": float(r.get("horas_inativa", 0.0) or 0.0),
+                    "last_price_update": float(r.get("last_price_update", 0.0) or 0.0)
                 })
             return pools
         else:
@@ -76,7 +80,10 @@ def add_pool_db(par, rede, valor_inicial, valor_atual, fees, r_min, r_max, data_
         "range_min": r_min,
         "range_max": r_max,
         "data_entrada": data_in.strftime("%Y-%m-%d"),
-        "wallet_address": wallet_addr
+        "wallet_address": wallet_addr,
+        "preco_atual": 0.0,
+        "horas_inativa": 0.0,
+        "last_price_update": time.time()
     }
     try:
         res = requests.post(url, headers=HEADERS, json=payload, timeout=8)
@@ -87,7 +94,7 @@ def add_pool_db(par, rede, valor_inicial, valor_atual, fees, r_min, r_max, data_
     except Exception as e:
         return False, f"Erro de conexão: {str(e)}"
 
-def update_pool_db(pool_id, valor_atual, fees, data_entrada, valor_inicial=None, wallet_addr="", r_min=None, r_max=None):
+def update_pool_db(pool_id, valor_atual, fees, data_entrada, valor_inicial=None, wallet_addr="", r_min=None, r_max=None, preco_atual=None, estado=None, horas_inativa=None, last_update=None):
     url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
     payload = {
         "valor_atual": valor_atual,
@@ -100,6 +107,15 @@ def update_pool_db(pool_id, valor_atual, fees, data_entrada, valor_inicial=None,
     if r_min is not None and r_max is not None:
         payload["range_min"] = r_min
         payload["range_max"] = r_max
+    if preco_atual is not None:
+        payload["preco_atual"] = preco_atual
+    if estado is not None:
+        payload["estado"] = estado
+    if horas_inativa is not None:
+        payload["horas_inativa"] = horas_inativa
+    if last_update is not None:
+        payload["last_price_update"] = last_update
+
     try:
         res = requests.patch(url, headers=HEADERS, json=payload, timeout=8)
         return res.status_code in [200, 204]
@@ -118,7 +134,7 @@ def clear_all_pools_db():
     url = f"{SUPABASE_URL}/rest/v1/pools?id=gt.0"
     requests.delete(url, headers=HEADERS)
 
-# APORTES: AUMENTA APENAS O VALOR INICIAL (NÃO MEXE NA LIQUIDEZ ATUAL)
+# APORTES E SAQUES
 def registrar_aporte_db(pool_id, valor_aporte, data_aporte):
     url_apt = f"{SUPABASE_URL}/rest/v1/aportes"
     payload = {
@@ -189,11 +205,11 @@ def delete_saque_db(saque_id, pool_id, valor_saque):
         url_p = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
         requests.patch(url_p, headers=HEADERS, json={"fees": n_fees})
 
-# CONSULTA DE PREÇOS DEXSCREENER
-def fetch_dexscreener_price(position_nft_address):
-    if not position_nft_address or not isinstance(position_nft_address, str):
+# CONSULTA DE PREÇOS DEXSCREENER POR PAIR ADDRESS
+def fetch_dexscreener_pair_price(pair_address):
+    if not pair_address or not isinstance(pair_address, str):
         return None, None
-    clean_addr = position_nft_address.strip()
+    clean_addr = pair_address.strip()
     if not clean_addr:
         return None, None
     url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{clean_addr}"
@@ -209,53 +225,55 @@ def fetch_dexscreener_price(position_nft_address):
         pass
     return None, None
 
-# ESTILOS CSS ADAPTATIVOS
+# VERIFICAÇÃO AUTOMÁTICA DE PREÇOS E ESTADO (INTERVALO DE 1 HORA)
+def sync_pool_price_and_range(pool, force_sync=False):
+    now = time.time()
+    last_update = pool.get("last_price_update", 0.0)
+    elapsed_hours = (now - last_update) / 3600.0 if last_update > 0 else 1.0
+
+    if force_sync or elapsed_hours >= 1.0:
+        p_usd, p_nat = fetch_dexscreener_pair_price(pool.get("wallet_address", ""))
+        if p_usd is not None and p_usd > 0:
+            r_min = pool["range_min"]
+            r_max = pool["range_max"]
+            
+            # Verifica se está no range
+            in_range = True
+            if r_min > 0 or r_max > 0:
+                if r_min > 0 and p_usd < r_min:
+                    in_range = False
+                if r_max > 0 and p_usd > r_max:
+                    in_range = False
+            
+            novo_estado = "Ativa" if in_range else "Inativa"
+            novas_horas_inativa = pool.get("horas_inativa", 0.0)
+            
+            if not in_range:
+                novas_horas_inativa += elapsed_hours if last_update > 0 else 1.0
+
+            update_pool_db(
+                pool["id"], 
+                valor_atual=pool["valor_atual"], 
+                fees=pool["fees"], 
+                data_entrada=pool["data_entrada"],
+                wallet_addr=pool["wallet_address"],
+                preco_atual=p_usd,
+                estado=novo_estado,
+                horas_inativa=novas_horas_inativa,
+                last_update=now
+            )
+            return p_usd, p_nat, novo_estado
+    return pool.get("preco_atual", 0.0), None, pool.get("estado", "Ativa")
+
+# ESTILOS CSS
 st.markdown("""
     <style>
-    .stApp {
-        background-color: #0b0e14;
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-    .info-box {
-        background-color: #11161d;
-        border: 1px solid #1f242c;
-        border-radius: 8px;
-        padding: 10px 14px;
-        font-size: 13px;
-        color: #9ca3af;
-    }
-    .info-box strong { color: #f3f4f6; }
-    .badge-ativa {
-        background-color: rgba(16, 185, 129, 0.15);
-        color: #10b981;
-        border: 1px solid rgba(16, 185, 129, 0.3);
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 11px;
-        font-weight: 600;
-    }
-    .badge-fechada {
-        background-color: rgba(239, 68, 68, 0.15);
-        color: #ef4444;
-        border: 1px solid rgba(239, 68, 68, 0.3);
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 11px;
-        font-weight: 600;
-    }
-    .stButton > button {
-        border-radius: 8px !important;
-        font-weight: 500 !important;
-    }
-    [data-testid="stMetricValue"] {
-        font-size: calc(1.0rem + 0.35vw) !important;
-        line-height: 1.2 !important;
-        white-space: nowrap !important;
-    }
-    [data-testid="stMetricLabel"] {
-        font-size: 0.78rem !important;
-        white-space: nowrap !important;
-    }
+    .stApp { background-color: #0b0e14; font-family: 'Inter', sans-serif; }
+    .badge-ativa { background-color: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .badge-inativa { background-color: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .stButton > button { border-radius: 8px !important; font-weight: 500 !important; }
+    [data-testid="stMetricValue"] { font-size: calc(1.0rem + 0.35vw) !important; line-height: 1.2 !important; white-space: nowrap !important; }
+    [data-testid="stMetricLabel"] { font-size: 0.78rem !important; white-space: nowrap !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -265,14 +283,17 @@ st.caption("Acompanhamento de performance e gestão DeFi (Persistência Cloud Ac
 
 pools_data = load_pools()
 
+# Auto-sincronização por hora ao carregar a página
+for p in pools_data:
+    sync_pool_price_and_range(p, force_sync=False)
+
 DEX_OPTIONS = ["Raydium", "Uniswap v3", "Orca", "Kamino", "PancakeSwap", "Curve", "Meteora", "Cetus", "Outro"]
 
-# MODAL RESUMO HISTÓRICO GERAL (1 LINHA POR POOL)
+# MODAL RESUMO HISTÓRICO GERAL
 @st.dialog("📋 Resumo Histórico das Piscinas")
 def modal_tabela_resumo_historico():
     st.subheader("📋 Resumo Geral de Todas as Pools")
-    st.caption("Estatísticas consolidadas de todas as posições (Ativas e Encerradas).")
-    
+    st.caption("Estatísticas consolidadas de todas as posições.")
     if not pools_data:
         st.info("Nenhuma piscina encontrada no histórico.")
         return
@@ -298,6 +319,7 @@ def modal_tabela_resumo_historico():
             "Par de Ativos": p["par"],
             "Plataforma / Rede": p["rede"],
             "Estado": p["estado"],
+            "Preço Atual ($)": f"${p.get('preco_atual', 0.0):.6f}",
             "Valor Inicial": f"${v_init:,.2f}",
             "Valor Atual": f"${v_atual:,.2f}",
             "Fees Acumuladas": f"${fees:,.2f}",
@@ -310,31 +332,31 @@ def modal_tabela_resumo_historico():
     st.dataframe(df_geral, use_container_width=True, hide_index=True)
 
 # MODAIS DE OPERAÇÃO
-@st.dialog("🔄 Sincronização On-Chain")
-def modal_sincronizar_carteira(pool_id, price_usd=None, price_native=None):
+@st.dialog("🔄 Sincronização On-Chain (DexScreener)")
+def modal_sincronizar_carteira(pool_id):
     pool = next((p for p in pools_data if p["id"] == pool_id), None)
     if pool is not None:
-        if price_usd and price_native:
-            st.info(f"💡 Cotação do Par no DexScreener: **${price_usd:.6f} USD** ({price_native:.6f} SOL)")
+        p_usd, p_nat, estado_range = sync_pool_price_and_range(pool, force_sync=True)
+        if p_usd and p_usd > 0:
+            st.info(f"💡 Cotação Atual no DexScreener: **${p_usd:.6f} USD** | Estado Calculado pelo Range: **{estado_range}**")
+
         val_default = float(pool["valor_atual"]) if pool["valor_atual"] > 0 else float(pool["valor_inicial"])
 
         with st.form(key=f"form_sync_{pool_id}"):
-            novo_end = st.text_input("Endereço do Par / Position Mint Address:", value=pool.get("wallet_address", ""))
+            novo_end = st.text_input("Morada do Par / Pair Address (DexScreener):", value=pool.get("wallet_address", ""))
             v_manual = st.number_input("Valor Atual da Pool ($ USD):", min_value=0.0, value=val_default, step=10.0)
             f_manual = st.number_input("Fees Acumuladas Totais ($ USD):", min_value=0.0, value=float(pool["fees"]), step=0.5)
             col_r1, col_r2 = st.columns(2)
             r_min_modal = col_r1.number_input("Range Mín", value=float(pool["range_min"]), format="%.6f", step=0.000001)
             r_max_modal = col_r2.number_input("Range Máx", value=float(pool["range_max"]), format="%.6f", step=0.000001)
 
-            sub = st.form_submit_button("Guardar e Atualizar Pool", type="primary", use_container_width=True)
+            sub = st.form_submit_button("Sincronizar e Guardar", type="primary", use_container_width=True)
             if sub:
                 valor_final = v_manual if v_manual > 0 else pool["valor_inicial"]
                 data_ent = pool.get("data_entrada", datetime.date.today())
                 if update_pool_db(pool_id, valor_final, f_manual, data_ent, wallet_addr=novo_end, r_min=r_min_modal, r_max=r_max_modal):
-                    st.success("Dados atualizados na nuvem!")
+                    st.success("Sincronizado com sucesso!")
                     st.rerun()
-                else:
-                    st.error("Erro ao atualizar a pool no Supabase.")
 
 @st.dialog("➕ Gestão de Aportes")
 def modal_gerir_aportes(pool_id):
@@ -347,15 +369,13 @@ def modal_gerir_aportes(pool_id):
                 dt_aporte = st.date_input("Data do Aporte:", datetime.date.today())
                 if st.form_submit_button("Confirmar Aporte", type="primary", use_container_width=True):
                     registrar_aporte_db(pool_id, v_aporte, dt_aporte)
-                    st.success("Aporte registado (adicionado ao valor inicial)!")
+                    st.success("Aporte registado!")
                     st.rerun()
         with tab_hist:
             historico = get_historico_aportes(pool_id)
             total_aportado = sum(val for _, _, val in historico)
-            
             st.metric("Total Aportado Nesta Pool", f"${total_aportado:,.2f}")
             st.markdown("---")
-
             if not historico:
                 st.info("Nenhum aporte registado.")
             else:
@@ -378,7 +398,7 @@ def modal_gerir_saques(pool_id):
                 dt_saque = st.date_input("Data do Saque:", datetime.date.today())
                 if st.form_submit_button("Confirmar Saque", type="primary", use_container_width=True):
                     registrar_saque_db(pool_id, v_saque, dt_saque)
-                    st.success("Saque guardado no Supabase!")
+                    st.success("Saque guardado!")
                     st.rerun()
         with tab_hist:
             historico = get_historico_saques(pool_id)
@@ -401,17 +421,15 @@ def modal_atualizar_pool(pool_id):
             novo_v_init = st.number_input("Valor Inicial ($ USD)", min_value=0.0, value=float(pool["valor_inicial"]), step=10.0)
             novo_v_atual = st.number_input("Valor Atual ($ USD)", min_value=0.0, value=float(pool["valor_atual"]), step=10.0)
             novas_fees = st.number_input("Total Fees ($ USD)", min_value=0.0, value=float(pool["fees"]), step=0.5)
-            end_c = st.text_input("Position Address", value=pool.get("wallet_address", ""))
+            end_c = st.text_input("Morada do Par (DexScreener)", value=pool.get("wallet_address", ""))
             col_r1, col_r2 = st.columns(2)
             novo_r_min = col_r1.number_input("Range Mín", value=float(pool["range_min"]), format="%.6f", step=0.000001)
             novo_r_max = col_r2.number_input("Range Máx", value=float(pool["range_max"]), format="%.6f", step=0.000001)
             nova_dt = st.date_input("Data Entrada", value=pool["data_entrada"])
             if st.form_submit_button("Guardar Alterações", type="primary", use_container_width=True):
                 if update_pool_db(pool_id, novo_v_atual, novas_fees, nova_dt, valor_inicial=novo_v_init, wallet_addr=end_c, r_min=novo_r_min, r_max=novo_r_max):
-                    st.success("Alterações salvas no Supabase!")
+                    st.success("Alterações salvas!")
                     st.rerun()
-                else:
-                    st.error("Erro ao guardar as alterações no Supabase.")
 
 # PAINEL LATERAL
 with st.sidebar:
@@ -423,7 +441,7 @@ with st.sidebar:
         v_init = st.number_input("Valor Inicial ($)", min_value=0.0)
         v_atual = st.number_input("Valor Atual ($)", min_value=0.0)
         fees_in = st.number_input("Fees Pendentes ($)", min_value=0.0)
-        wallet_addr = st.text_input("Position Address")
+        wallet_addr = st.text_input("Morada do Par (DexScreener)")
         col_r1, col_r2 = st.columns(2)
         r_min = col_r1.number_input("Range Mín", format="%.6f", step=0.000001)
         r_max = col_r2.number_input("Range Máx", format="%.6f", step=0.000001)
@@ -487,6 +505,11 @@ else:
         dt_entrada = pool.get("data_entrada", datetime.date.today())
         dias_totais = max(1, (dt_hoje - dt_entrada).days)
 
+        # Cálculo de tempo Ativa vs. Inativa
+        horas_inativa_totais = pool.get("horas_inativa", 0.0)
+        dias_inativa = horas_inativa_totais / 24.0
+        dias_ativa = max(0.0, dias_totais - dias_inativa)
+
         total_fees_geradas = pool["fees"]
         pnl_liquidez_usd = pool["valor_atual"] - pool["valor_inicial"]
         pnl_total_usd = (pool["valor_atual"] + total_fees_geradas) - pool["valor_inicial"]
@@ -499,9 +522,11 @@ else:
         with st.container():
             head_col1, head_col2 = st.columns([1.5, 3.5])
             with head_col1:
-                badge_class = "badge-ativa" if pool["estado"] == "Ativa" else "badge-fechada"
+                badge_class = "badge-ativa" if pool["estado"] == "Ativa" else "badge-inativa"
+                p_atual_str = f" | Preço: ${pool.get('preco_atual', 0.0):.6f}" if pool.get('preco_atual', 0.0) > 0 else ""
                 st.markdown(f"### 🪙 **Pool #{idx}: {pool['par']}** <span class='{badge_class}'>{pool['estado']}</span>", unsafe_allow_html=True)
-                st.caption(f"DEX / Rede: {pool['rede']} | Investido Inicial: ${pool['valor_inicial']:,.2f}")
+                st.caption(f"DEX / Rede: {pool['rede']} | Investido: ${pool['valor_inicial']:,.2f}{p_atual_str}")
+                st.caption(f"⏱️ **Tempo Ativa:** {dias_ativa:.1f} dias | **Tempo Inativa:** {dias_inativa:.1f} dias ({horas_inativa_totais:.0f}h)")
 
             with head_col2:
                 m1, m2, m3, m4, m5 = st.columns([1, 1, 1, 1, 1])
@@ -512,12 +537,11 @@ else:
                 m5.metric("Fees", f"${pool['fees']:,.2f}")
 
             col_b1, col_b2, col_b3, col_b4, col_b5 = st.columns(5)
-            if col_b1.button("✏️ Editar", key=f"edit_{pool['id']}", use_container_width=True):
+            if col_b1.button("✏️️ Editar", key=f"edit_{pool['id']}", use_container_width=True):
                 modal_atualizar_pool(pool["id"])
 
             if col_b2.button("🔗 Sincronizar", key=f"sync_{pool['id']}", use_container_width=True):
-                p_usd, p_nat = fetch_dexscreener_price(pool.get("wallet_address", ""))
-                modal_sincronizar_carteira(pool["id"], price_usd=p_usd, price_native=p_nat)
+                modal_sincronizar_carteira(pool["id"])
 
             if col_b3.button("➕ Aporte", key=f"aporte_{pool['id']}", use_container_width=True):
                 modal_gerir_aportes(pool["id"])
@@ -527,8 +551,8 @@ else:
 
             with col_b5:
                 with st.popover("⚙️ Mais Opções", use_container_width=True):
-                    if st.button("🔒 Fechar/Ativar", key=f"close_{pool['id']}", use_container_width=True):
-                        update_pool_status_db(pool["id"], "Fechada" if pool["estado"] == "Ativa" else "Ativa")
+                    if st.button("🔒 Alternar Estado", key=f"close_{pool['id']}", use_container_width=True):
+                        update_pool_status_db(pool["id"], "Inativa" if pool["estado"] == "Ativa" else "Ativa")
                         st.rerun()
                     if st.button("🗑️ Excluir Pool", key=f"del_{pool['id']}", use_container_width=True, type="primary"):
                         delete_pool_db(pool["id"])
@@ -548,7 +572,7 @@ else:
 
             if st.session_state[show_chart_key]:
                 tab_il_vs_fees, tab_apr_perc = st.tabs([
-                    "秤 Fees vs. Impermanent Loss / PnL ($)", 
+                    "⚖️ Fees vs. Impermanent Loss / PnL ($)", 
                     "📊 Percentuais de APR (%)"
                 ])
 
