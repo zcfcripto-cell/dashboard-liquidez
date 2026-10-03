@@ -28,8 +28,6 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
-SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
-
 def load_pools():
     if not SUPABASE_URL or not SUPABASE_KEY:
         st.warning("Configura os Secrets (SUPABASE_URL e SUPABASE_KEY) para ativar a persistência na nuvem.")
@@ -231,40 +229,6 @@ def fetch_dexscreener_pair_price(pair_address):
         pass
     return None, None
 
-# LEITURA DE BALANÇO VIA SOLANA RPC (RAYDIUM / METEORA)
-def fetch_solana_pair_liquidity_usd(pair_address, price_usd):
-    if not pair_address or not price_usd or price_usd <= 0:
-        return None
-    
-    clean_addr = pair_address.strip()
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getTokenAccountsByOwner",
-        "params": [
-            clean_addr,
-            {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"},
-            {"encoding": "jsonParsed"}
-        ]
-    }
-    try:
-        res = requests.post(SOLANA_RPC_URL, json=payload, timeout=6)
-        if res.status_code == 200:
-            result = res.json().get("result", {}).get("value", [])
-            total_val = 0.0
-            found_tokens = False
-            for acc in result:
-                info = acc.get("account", {}).get("data", {}).get("parsed", {}).get("info", {})
-                token_amount = float(info.get("tokenAmount", {}).get("uiAmount", 0.0) or 0.0)
-                if token_amount > 0:
-                    found_tokens = True
-                    total_val += token_amount * price_usd
-            if found_tokens and total_val > 0:
-                return total_val
-    except Exception:
-        pass
-    return None
-
 # VERIFICAÇÃO AUTOMÁTICA DE PREÇOS, RANGE E VALOR ATUAL
 def sync_pool_price_and_range(pool, force_sync=False):
     now = time.time()
@@ -275,12 +239,11 @@ def sync_pool_price_and_range(pool, force_sync=False):
         p_usd, p_nat = fetch_dexscreener_pair_price(pool.get("wallet_address", ""))
         novo_valor_atual = pool["valor_atual"]
 
-        # Tenta calcular automaticamente o Valor Atual para Raydium/Meteora via Solana RPC
-        is_raydium_or_meteora = any(k in pool.get("rede", "").lower() for k in ["raydium", "meteora", "solana"])
-        if is_raydium_or_meteora and p_usd and p_usd > 0:
-            calc_val = fetch_solana_pair_liquidity_usd(pool.get("wallet_address", ""), p_usd)
-            if calc_val and calc_val > 0:
-                novo_valor_atual = calc_val
+        # Se houver preço nativo válido, recalcula o valor atual proporcionalmente à variação do preço
+        preco_anterior = pool.get("preco_nativo", 0.0)
+        if p_nat and p_nat > 0 and preco_anterior and preco_anterior > 0:
+            var_preco = p_nat / preco_anterior
+            novo_valor_atual = round(pool["valor_atual"] * var_preco, 2)
 
         if p_nat is not None and p_nat > 0:
             r_min = pool["range_min"]
@@ -514,7 +477,7 @@ with st.sidebar:
                 st.error(msg)
 
     st.markdown("---")
-    if st.button("🗑️️ Limpar Portfólio"):
+    if st.button("🗑 Limpar Portfólio"):
         clear_all_pools_db()
         st.rerun()
 
@@ -604,7 +567,7 @@ else:
                     if st.button("🔒 Alternar Estado", key=f"close_{pool['id']}", use_container_width=True):
                         update_pool_status_db(pool["id"], "Inativa" if pool["estado"] == "Ativa" else "Ativa")
                         st.rerun()
-                    if st.button("🗑️️ Excluir Pool", key=f"del_{pool['id']}", use_container_width=True, type="primary"):
+                    if st.button("🗑 Excluir Pool", key=f"del_{pool['id']}", use_container_width=True, type="primary"):
                         delete_pool_db(pool["id"])
                         st.rerun()
 
