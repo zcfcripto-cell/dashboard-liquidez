@@ -208,7 +208,7 @@ c_kpi5.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}"
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (Com Horas Inativa & Last Update)
+# 7. POSIÇÕES EM MONITORIZAÇÃO (Com % de Desvio dos Limites)
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -238,7 +238,18 @@ else:
         last_upd = p.get("last_price_update")
         addr = p.get("wallet_address", "")
 
-        # Formatação de data da última atualização
+        # Cálculo da Percentagem de Desvio dos Limites (Min / Max)
+        pct_desvio = 0.0
+        tipo_desvio = "EM RANGE"
+
+        if r_max > 0 and p_nat > r_max:
+            pct_desvio = ((p_nat - r_max) / r_max) * 100
+            tipo_desvio = f"+{pct_desvio:.2f}% acima do máx"
+        elif r_min > 0 and p_nat < r_min:
+            pct_desvio = ((r_min - p_nat) / r_min) * 100
+            tipo_desvio = f"-{pct_desvio:.2f}% abaixo do mín"
+
+        # Formatação da data de atualização
         last_upd_str = "N/A"
         if last_upd and to_float(last_upd) > 0:
             try:
@@ -250,7 +261,7 @@ else:
         if is_active:
             badge_html = '<span class="badge-active">🟢 EM RANGE</span>'
         else:
-            badge_html = f'<span class="badge-inactive">🔴 FORA DE RANGE ({hrs_inativa:.1f}h)</span>'
+            badge_html = f'<span class="badge-inactive">🔴 FORA ({tipo_desvio} | {hrs_inativa:.1f}h)</span>'
         
         card_class = "pool-card pool-card-active" if is_active else "pool-card pool-card-inactive"
 
@@ -266,7 +277,11 @@ else:
 
             col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
             col_a.metric("Preço Nativo / USD", f"{p_nat:.6f}", delta=f"${p_usd:.4f}" if p_usd > 0 else None)
-            col_b.metric("Range Definição", f"{r_min:.6f} - {r_max:.6f}")
+            
+            # Mostra o desvio no cartão do Range
+            delta_range = f"{tipo_desvio}" if not is_active else "OK"
+            col_b.metric("Range Mín / Máx", f"{r_min:.6f} - {r_max:.6f}", delta=delta_range, delta_color="inverse" if not is_active else "normal")
+            
             col_c.metric("Investido", f"${v_inv:,.2f}")
             col_d.metric("Valor Atual", f"${v_at:,.2f}")
             col_e.metric("Fees Geradas 💸", f"${v_fees:,.2f}")
