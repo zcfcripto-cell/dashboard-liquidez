@@ -34,11 +34,13 @@ jobs:
           import time
           import requests
 
-          raw_url = os.environ.get("SUPABASE_URL", "").strip()
+          raw_url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+          
+          # Tratamento para garantir URL do Supabase correto
           if not raw_url.startswith("http"):
-              SUPABASE_URL = f"https://{raw_url}"
+              base_url = f"https://{raw_url}"
           else:
-              SUPABASE_URL = raw_url
+              base_url = raw_url
 
           SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
           TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
@@ -74,7 +76,8 @@ jobs:
               "Content-Type": "application/json"
           }
 
-          url_pools = f"{SUPABASE_URL}/rest/v1/pools?select=*&estado=eq.Ativa"
+          url_pools = f"{base_url}/rest/v1/pools?select=*&estado=eq.Ativa"
+          print(f"Ligar ao Supabase em: {url_pools}")
           res = requests.get(url_pools, headers=headers, timeout=10)
           
           if res.status_code == 200:
@@ -101,7 +104,7 @@ jobs:
                           enviar_telegram(f"⚠️ *ALERTA AUTOMÁTICO (ACIMA)* ⚠️\n\n📌 *Par:* {par}\n📈 *Preço Nativo:* `{p_nat:.8f}`\n🔺 *Máximo:* `{r_max:.8f}`")
                       
                       novo_estado = "Ativa" if in_range else "Inativa"
-                      url_patch = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{p['id']}"
+                      url_patch = f"{base_url}/rest/v1/pools?id=eq.{p['id']}"
                       payload_patch = {
                           "preco_atual": p_usd,
                           "preco_nativo": p_nat,
