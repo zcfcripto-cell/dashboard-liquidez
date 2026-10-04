@@ -32,7 +32,7 @@ st.markdown("""
     .badge-active {
         background-color: rgba(16, 185, 129, 0.2);
         color: #10b981;
-        padding: 4px 12px;
+        padding: 6px 14px;
         border-radius: 20px;
         font-weight: 600;
         font-size: 0.85rem;
@@ -40,7 +40,7 @@ st.markdown("""
     .badge-inactive {
         background-color: rgba(239, 68, 68, 0.2);
         color: #ef4444;
-        padding: 4px 12px;
+        padding: 6px 14px;
         border-radius: 20px;
         font-weight: 600;
         font-size: 0.85rem;
@@ -109,6 +109,18 @@ def to_float(val, default=0.0):
         return float(val)
     except (ValueError, TypeError):
         return default
+
+def format_crypto_price(val):
+    """ Formata o preço nativo garantindo precisão mesmo para micro-valores """
+    v = to_float(val)
+    if v == 0:
+        return "0.00"
+    elif v < 0.001:
+        return f"{v:.8f}"
+    elif v < 1:
+        return f"{v:.6f}"
+    else:
+        return f"{v:.4f}"
 
 # -----------------------------------------------------------------------------
 # 4. BARRA LATERAL & FILTROS
@@ -194,7 +206,7 @@ pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
 # -----------------------------------------------------------------------------
-# 6. EXIBIÇÃO DE KPIS
+# 6. EXIBIÇÃO DE KPIS (Métricas Gerais)
 # -----------------------------------------------------------------------------
 st.title("⚡ Painel de Desempenho de Liquidez")
 
@@ -208,7 +220,7 @@ c_kpi5.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}"
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (Com % de Desvio dos Limites)
+# 7. POSIÇÕES EM MONITORIZAÇÃO (Com % de Desvio Mín/Máx)
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -238,18 +250,18 @@ else:
         last_upd = p.get("last_price_update")
         addr = p.get("wallet_address", "")
 
-        # Cálculo da Percentagem de Desvio dos Limites (Min / Max)
+        # Cálculo exato do Desvio %
         pct_desvio = 0.0
         tipo_desvio = "EM RANGE"
 
         if r_max > 0 and p_nat > r_max:
             pct_desvio = ((p_nat - r_max) / r_max) * 100
-            tipo_desvio = f"+{pct_desvio:.2f}% acima do máx"
+            tipo_desvio = f"+{pct_desvio:.2f}% máx"
         elif r_min > 0 and p_nat < r_min:
             pct_desvio = ((r_min - p_nat) / r_min) * 100
-            tipo_desvio = f"-{pct_desvio:.2f}% abaixo do mín"
+            tipo_desvio = f"-{pct_desvio:.2f}% mín"
 
-        # Formatação da data de atualização
+        # Formatação de timestamps legíveis
         last_upd_str = "N/A"
         if last_upd and to_float(last_upd) > 0:
             try:
@@ -276,11 +288,13 @@ else:
             """, unsafe_allow_html=True)
 
             col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
-            col_a.metric("Preço Nativo / USD", f"{p_nat:.6f}", delta=f"${p_usd:.4f}" if p_usd > 0 else None)
             
-            # Mostra o desvio no cartão do Range
+            # Preço Nativo com Formatação de Precisão
+            col_a.metric("Preço Nativo / USD", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
+            
+            # Limites e Delta do Desvio
             delta_range = f"{tipo_desvio}" if not is_active else "OK"
-            col_b.metric("Range Mín / Máx", f"{r_min:.6f} - {r_max:.6f}", delta=delta_range, delta_color="inverse" if not is_active else "normal")
+            col_b.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}", delta=delta_range, delta_color="inverse" if not is_active else "normal")
             
             col_c.metric("Investido", f"${v_inv:,.2f}")
             col_d.metric("Valor Atual", f"${v_at:,.2f}")
@@ -347,7 +361,7 @@ with st.expander("⚙️ Gestão de Pools (Adicionar Nova / Tabela Completa)"):
             
             c7, c8 = st.columns(2)
             fees_in = c7.number_input("Fees Geradas ($ USD)", min_value=0.0, step=1.0)
-            data_ent_in = c8.text_input("Data de Entrada (YYYY-MM-DD)", value="2026-10-05")
+            data_ent_in = c8.text_input("Data de Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
 
             btn_save = st.form_submit_button("Salvar Pool")
 
