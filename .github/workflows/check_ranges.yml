@@ -53,6 +53,8 @@ jobs:
                       print(f"Status envio Telegram: {res.status_code}")
                   except Exception as e:
                       print(f"Erro Telegram: {e}")
+              else:
+                  print("⚠️ TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID não definidos nas Secrets!")
 
           def fetch_dexscreener_price(pair_address):
               if not pair_address or len(pair_address.strip()) < 5:
@@ -75,7 +77,6 @@ jobs:
               "Content-Type": "application/json"
           }
 
-          # Procura TODAS as pools para evitar que pools com estado ligeiramente diferente sejam ignoradas
           url_pools = f"{base_url}/rest/v1/pools?select=*"
           print(f"Ligar ao Supabase em: {url_pools}")
           res = requests.get(url_pools, headers=headers, timeout=10)
@@ -89,7 +90,7 @@ jobs:
                   estado_atual = str(p.get("estado", "")).strip()
                   addr = str(p.get("wallet_address", "") or "").strip()
                   
-                  print(f"\n--- A analisar Pool ID {p.get('id')}: {par} (Estado: '{estado_atual}') ---")
+                  print(f"\n--- A analisar Pool ID {p.get('id')}: {par} (Estado atual: '{estado_atual}') ---")
 
                   if not addr:
                       print(f"⚠️ AVISO: Pool {par} não tem Pair Address (wallet_address) definido. A saltar...")
@@ -108,7 +109,7 @@ jobs:
                       elif r_max > 0 and p_nat > r_max:
                           in_range = False
                           print(f"🚨 FORA DE RANGE (ACIMA): Preço {p_nat} > Máx {r_max}")
-                          enviar_telegram(f"⚠️ *ALERTA AUTOMÁTICO (ACIMA)* ⚠️️\n\n📌 *Par:* {par}\n📈 *Preço Nativo:* `{p_nat:.8f}`\n🔺 *Máximo:* `{r_max:.8f}`")
+                          enviar_telegram(f"⚠️ *ALERTA AUTOMÁTICO (ACIMA)* ⚠️\n\n📌 *Par:* {par}\n📈 *Preço Nativo:* `{p_nat:.8f}`\n🔺 *Máximo:* `{r_max:.8f}`")
                       else:
                           print(f"✅ DENTRO DO RANGE: Preço {p_nat} está entre {r_min} e {r_max}")
                       
