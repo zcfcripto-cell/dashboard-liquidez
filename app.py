@@ -136,7 +136,6 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
                     
                     novo_estado = "Ativa" if in_range else "Inativa"
                     
-                    # Usa valor_atual e preco_nativo
                     patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{p['id']}"
                     patch_data = {
                         "preco_nativo": p_nat,
@@ -151,28 +150,30 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS (Mapeado para valor_inicial e valor_atual)
+# 5. CÁLCULO DE MÉTRICAS (Com leitura da coluna 'fees')
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
+total_fees = 0.0
 total_ativas = 0
 total_inativas = 0
 
 pools_processadas = []
 
 for p in pools:
-    # Leitura correta das tuas colunas
     v_inv = to_float(p.get("valor_inicial"))
     v_at = to_float(p.get("valor_atual"))
+    v_fees = to_float(p.get("fees"))  # Mapeado diretamente para a tua coluna 'fees'
     
-    # Se o valor_atual estiver a 0, usa o valor_inicial temporariamente
     v_atual_final = v_at if v_at > 0 else v_inv
     
-    pnl_pool = v_atual_final - v_inv
+    # PnL líquido = (Valor Atual + Fees) - Valor Inicial
+    pnl_pool = (v_atual_final + v_fees) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
 
     total_investido += v_inv
     total_valor_atual += v_atual_final
+    total_fees += v_fees
 
     estado = p.get("estado", "Ativa")
     if estado == "Ativa":
@@ -183,11 +184,13 @@ for p in pools:
     p_item = p.copy()
     p_item["v_inicial_calc"] = v_inv
     p_item["v_atual_calc"] = v_atual_final
+    p_item["fees_calc"] = v_fees
     p_item["pnl_pool"] = pnl_pool
     p_item["roi_pool"] = roi_pool
     pools_processadas.append(p_item)
 
-pnl_global = total_valor_atual - total_investido
+valor_total_com_fees = total_valor_atual + total_fees
+pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
 # -----------------------------------------------------------------------------
@@ -195,11 +198,12 @@ roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.
 # -----------------------------------------------------------------------------
 st.title("⚡ Painel de Desempenho de Liquidez")
 
-c_kpi1, c_kpi2, c_kpi3, c_kpi4 = st.columns(4)
+c_kpi1, c_kpi2, c_kpi3, c_kpi4, c_kpi5 = st.columns(5)
 c_kpi1.metric("Investimento Total", f"${total_investido:,.2f}")
-c_kpi2.metric("Valor em Carteira", f"${total_valor_atual:,.2f}", delta=f"${pnl_global:,.2f}")
-c_kpi3.metric("ROI Acumulado", f"{roi_global:.2f}%", delta=f"{roi_global:.2f}%")
-c_kpi4.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
+c_kpi2.metric("Valor em Pools", f"${total_valor_atual:,.2f}")
+c_kpi3.metric("Fees Geradas 💸", f"${total_fees:,.2f}")
+c_kpi4.metric("PnL Total (+Fees)", f"${pnl_global:,.2f}", delta=f"{roi_global:.2f}%")
+c_kpi5.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -225,8 +229,10 @@ else:
         r_max = to_float(p.get("range_max"))
         v_inv = p["v_inicial_calc"]
         v_at = p["v_atual_calc"]
+        v_fees = p["fees_calc"]
         pnl_pool = p["pnl_pool"]
         roi_pool = p["roi_pool"]
+        data_ent = p.get("data_entrada", "N/A")
         addr = p.get("wallet_address", "")
 
         is_active = (estado == "Ativa")
@@ -237,18 +243,19 @@ else:
             st.markdown(f"""
             <div class="{card_class}">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <h3 style="margin:0; font-size: 1.3rem;">{par}</h3>
+                    <h3 style="margin:0; font-size: 1.3rem;">{par} <span style="font-size: 0.9rem; color: #a0aec0; font-weight: normal;">(Entrada: {data_ent})</span></h3>
                     {badge_html}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            col_a, col_b, col_c, col_d, col_e = st.columns(5)
+            col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
             col_a.metric("Preço Nativo", f"{p_nat:.6f}")
-            col_b.metric("Range Definição", f"{r_min:.6f} - {r_max:.6f}")
-            col_c.metric("Valor Inicial", f"${v_inv:,.2f}")
+            col_b.metric("Range", f"{r_min:.6f} - {r_max:.6f}")
+            col_c.metric("Investido", f"${v_inv:,.2f}")
             col_d.metric("Valor Atual", f"${v_at:,.2f}")
-            col_e.metric("PnL ($ / %)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
+            col_e.metric("Fees Geradas 💸", f"${v_fees:,.2f}")
+            col_f.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
 
             if addr:
                 st.markdown(f"[🔍 Abrir no DexScreener](https://dexscreener.com/search?q={addr})")
@@ -307,6 +314,10 @@ with st.expander("⚙️ Gestão de Pools (Adicionar Nova / Tabela Completa)"):
             rmin_in = c4.number_input("Range Mínimo", min_value=0.0, format="%.8f")
             rmax_in = c5.number_input("Range Máximo", min_value=0.0, format="%.8f")
             v_atual_in = c6.number_input("Valor Atual ($ USD)", min_value=0.0, step=10.0)
+            
+            c7, c8 = st.columns(2)
+            fees_in = c7.number_input("Fees Geradas ($ USD)", min_value=0.0, step=1.0)
+            data_ent_in = c8.text_input("Data de Entrada (YYYY-MM-DD)", value="2026-10-05")
 
             btn_save = st.form_submit_button("Salvar Pool")
 
@@ -320,6 +331,8 @@ with st.expander("⚙️ Gestão de Pools (Adicionar Nova / Tabela Completa)"):
                         "wallet_address": addr_in,
                         "valor_inicial": invest_in,
                         "valor_atual": v_atual_in if v_atual_in > 0 else invest_in,
+                        "fees": fees_in,
+                        "data_entrada": data_ent_in,
                         "range_min": rmin_in,
                         "range_max": rmax_in,
                         "preco_nativo": p_nat or 0,
