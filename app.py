@@ -21,7 +21,7 @@ def init_supabase() -> Client:
 supabase = init_supabase()
 
 # ==========================================
-# 2. TELEGRAM E ALERTAS (COM PROTEÇÃO)
+# 2. TELEGRAM E ALERTAS (ISOLADO)
 # ==========================================
 def enviar_alerta_telegram(mensagem: str):
     token = st.secrets.get("TELEGRAM_TOKEN")
@@ -88,6 +88,7 @@ def obter_preco_dexscreener(pair_address):
 # 4. INTERFACE PRINCIPAL
 # ==========================================
 st.title("⚡ Gestor de Piscinas de Liquidez")
+st.caption("Acompanhamento de performance e gestão DeFi")
 
 pools_data = carregar_pools()
 
@@ -137,7 +138,7 @@ with st.sidebar:
                 st.success("Piscina guardada!")
                 st.rerun()
 
-# TABELA DE POOLS
+# TABELA DE POOLS - APRESENTAÇÃO DIRETA
 st.subheader("📋 Suas Piscinas Ativas")
 
 if pools_data:
