@@ -35,8 +35,6 @@ jobs:
           import requests
 
           raw_url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
-          
-          # Tratamento para garantir URL do Supabase correto
           if not raw_url.startswith("http"):
               base_url = f"https://{raw_url}"
           else:
@@ -51,12 +49,13 @@ jobs:
                   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
                   payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
                   try:
-                      requests.post(url, json=payload, timeout=8)
+                      res = requests.post(url, json=payload, timeout=8)
+                      print(f"Status envio Telegram: {res.status_code}")
                   except Exception as e:
                       print(f"Erro Telegram: {e}")
 
           def fetch_dexscreener_price(pair_address):
-              if not pair_address or len(pair_address.strip()) < 10:
+              if not pair_address or len(pair_address.strip()) < 5:
                   return None, None
               url = f"https://api.dexscreener.com/latest/dex/search?q={pair_address.strip()}"
               try:
@@ -76,32 +75,42 @@ jobs:
               "Content-Type": "application/json"
           }
 
-          url_pools = f"{base_url}/rest/v1/pools?select=*&estado=eq.Ativa"
+          # Procura TODAS as pools para evitar que pools com estado ligeiramente diferente sejam ignoradas
+          url_pools = f"{base_url}/rest/v1/pools?select=*"
           print(f"Ligar ao Supabase em: {url_pools}")
           res = requests.get(url_pools, headers=headers, timeout=10)
           
           if res.status_code == 200:
               pools = res.json()
-              print(f"Encontradas {len(pools)} pools ativas.")
+              print(f"Encontradas {len(pools)} pools no total na base de dados.")
               
               for p in pools:
-                  addr = p.get("wallet_address", "")
+                  par = p.get("par", "Desconhecido")
+                  estado_atual = str(p.get("estado", "")).strip()
+                  addr = str(p.get("wallet_address", "") or "").strip()
+                  
+                  print(f"\n--- A analisar Pool ID {p.get('id')}: {par} (Estado: '{estado_atual}') ---")
+
                   if not addr:
+                      print(f"⚠️ AVISO: Pool {par} não tem Pair Address (wallet_address) definido. A saltar...")
                       continue
                       
                   p_usd, p_nat = fetch_dexscreener_price(addr)
-                  if p_nat and p_nat > 0:
+                  if p_nat is not None and p_nat > 0:
                       r_min = float(p.get("range_min", 0) or 0)
                       r_max = float(p.get("range_max", 0) or 0)
-                      par = p.get("par", "Desconhecido")
                       
                       in_range = True
                       if r_min > 0 and p_nat < r_min:
                           in_range = False
+                          print(f"🚨 FORA DE RANGE (ABAIXO): Preço {p_nat} < Mín {r_min}")
                           enviar_telegram(f"⚠️ *ALERTA AUTOMÁTICO (ABAIXO)* ⚠️\n\n📌 *Par:* {par}\n📉 *Preço Nativo:* `{p_nat:.8f}`\n🔻 *Mínimo:* `{r_min:.8f}`")
                       elif r_max > 0 and p_nat > r_max:
                           in_range = False
-                          enviar_telegram(f"⚠️ *ALERTA AUTOMÁTICO (ACIMA)* ⚠️\n\n📌 *Par:* {par}\n📈 *Preço Nativo:* `{p_nat:.8f}`\n🔺 *Máximo:* `{r_max:.8f}`")
+                          print(f"🚨 FORA DE RANGE (ACIMA): Preço {p_nat} > Máx {r_max}")
+                          enviar_telegram(f"⚠️ *ALERTA AUTOMÁTICO (ACIMA)* ⚠️️\n\n📌 *Par:* {par}\n📈 *Preço Nativo:* `{p_nat:.8f}`\n🔺 *Máximo:* `{r_max:.8f}`")
+                      else:
+                          print(f"✅ DENTRO DO RANGE: Preço {p_nat} está entre {r_min} e {r_max}")
                       
                       novo_estado = "Ativa" if in_range else "Inativa"
                       url_patch = f"{base_url}/rest/v1/pools?id=eq.{p['id']}"
@@ -112,7 +121,9 @@ jobs:
                           "last_price_update": time.time()
                       }
                       requests.patch(url_patch, headers=headers, json=payload_patch)
-                      print(f"Pool {par} verificada: {p_nat} (In Range: {in_range})")
+                      print(f"Pool {par} atualizada no Supabase. Novo Estado: {novo_estado}")
+                  else:
+                      print(f"❌ Não foi possível obter preço no DexScreener para o endereço: {addr}")
           else:
               print(f"Erro ao aceder ao Supabase (Código {res.status_code}): {res.text}")
               raise Exception("Falha de conexão com o Supabase.")
