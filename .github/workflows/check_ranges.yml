@@ -2,19 +2,18 @@ name: Verificação Horária de Ranges das Pools
 
 on:
   schedule:
-    # Executa a cada hora no minuto 0 (Cron UTC)
     - cron: '0 * * * *'
-  workflow_dispatch: # Permite testar manualmente a qualquer momento
+  workflow_dispatch:
 
 jobs:
   check-pools:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout do Repositório
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Configurar Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -35,10 +34,15 @@ jobs:
           import time
           import requests
 
-          SUPABASE_URL = os.environ.get("SUPABASE_URL")
-          SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-          TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-          TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+          raw_url = os.environ.get("SUPABASE_URL", "").strip()
+          if not raw_url.startswith("http"):
+              SUPABASE_URL = f"https://{raw_url}"
+          else:
+              SUPABASE_URL = raw_url
+
+          SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+          TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
+          TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
           def enviar_telegram(msg):
               if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
@@ -47,7 +51,7 @@ jobs:
                   try:
                       requests.post(url, json=payload, timeout=8)
                   except Exception as e:
-                      print(f"Erro ao enviar Telegram: {e}")
+                      print(f"Erro Telegram: {e}")
 
           def fetch_dexscreener_price(pair_address):
               if not pair_address or len(pair_address.strip()) < 10:
@@ -61,7 +65,7 @@ jobs:
                           pair = data["pairs"][0]
                           return float(pair.get("priceUsd", 0)), float(pair.get("priceNative", 0))
               except Exception as e:
-                  print(f"Erro no DexScreener: {e}")
+                  print(f"Erro DexScreener: {e}")
               return None, None
 
           headers = {
@@ -70,7 +74,6 @@ jobs:
               "Content-Type": "application/json"
           }
 
-          # 1. Carregar Pools
           url_pools = f"{SUPABASE_URL}/rest/v1/pools?select=*&estado=eq.Ativa"
           res = requests.get(url_pools, headers=headers, timeout=10)
           
@@ -97,7 +100,6 @@ jobs:
                           in_range = False
                           enviar_telegram(f"⚠️ *ALERTA AUTOMÁTICO (ACIMA)* ⚠️\n\n📌 *Par:* {par}\n📈 *Preço Nativo:* `{p_nat:.8f}`\n🔺 *Máximo:* `{r_max:.8f}`")
                       
-                      # Atualizar preço e estado no Supabase
                       novo_estado = "Ativa" if in_range else "Inativa"
                       url_patch = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{p['id']}"
                       payload_patch = {
@@ -109,5 +111,6 @@ jobs:
                       requests.patch(url_patch, headers=headers, json=payload_patch)
                       print(f"Pool {par} verificada: {p_nat} (In Range: {in_range})")
           else:
-              print(f"Erro ao aceder ao Supabase: {res.status_code}")
+              print(f"Erro ao aceder ao Supabase (Código {res.status_code}): {res.text}")
+              raise Exception("Falha de conexão com o Supabase.")
           EOF
