@@ -92,13 +92,17 @@ for p in pools:
     else:
         total_valor_atual += v_inv
 
+# Se não estiver definido valor investido, assume o valor atual para evitar zeros incorretos
+if total_investido == 0 and total_valor_atual > 0:
+    total_investido = total_valor_atual
+
 pnl_global = total_valor_atual - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
 col_m1.metric("Investimento Total", f"${total_investido:,.2f}")
 col_m2.metric("Valor Atual Estimado", f"${total_valor_atual:,.2f}")
-col_m3.metric("PnL Total ($)", f"${pnl_global:,.2f}", delta=f"{pnl_global:,.2f}")
+col_m3.metric("PnL Total ($)", f"${pnl_global:,.2f}", delta=f"${pnl_global:,.2f}")
 col_m4.metric("ROI Acumulado (%)", f"{roi_global:.2f}%", delta=f"{roi_global:.2f}%")
 
 st.markdown("---")
@@ -144,7 +148,7 @@ st.subheader("📋 Minhas Piscinas de Liquidez")
 
 if pools:
     df_pools = pd.DataFrame(pools)
-    cols_display = ["id", "par", "estado", "preco_nativo", "range_min", "range_max", "valor_investido", "wallet_address"]
+    cols_display = ["id", "par", "estado", "preco_nativo", "range_min", "range_max", "valor_investido", "quantidade", "wallet_address"]
     cols_existentes = [c for c in cols_display if c in df_pools.columns]
     
     st.dataframe(
@@ -194,7 +198,7 @@ with st.expander("➕ Adicionar / Editar Piscina"):
                     st.error(f"Erro ao guardar: {res.text}")
 
 # -----------------------------------------------------------------------------
-# 6. HISTÓRICO DE EVOLUÇÃO DE PNL & CARTEIRA (MELHORIA #2)
+# 6. HISTÓRICO DE EVOLUÇÃO DE PNL & CARTEIRA
 # -----------------------------------------------------------------------------
 st.markdown("---")
 st.subheader("📈 Evolução Histórica de Valor e PnL")
