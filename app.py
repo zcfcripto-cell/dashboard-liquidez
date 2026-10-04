@@ -28,6 +28,21 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
+# -------------------------------------------------------------
+# ALERTAS DO TELEGRAM
+# -------------------------------------------------------------
+def enviar_alerta_telegram(mensagem: str):
+    """Envia alerta para o Telegram de forma segura."""
+    token = st.secrets.get("TELEGRAM_TOKEN", "")
+    chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "")
+    if token and chat_id:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": mensagem, "parse_mode": "Markdown"}
+        try:
+            requests.post(url, json=payload, timeout=5)
+        except Exception:
+            pass
+
 def load_pools():
     if not SUPABASE_URL or not SUPABASE_KEY:
         st.warning("Configura os Secrets (SUPABASE_URL e SUPABASE_KEY) para ativar a persistência na nuvem.")
@@ -50,13 +65,13 @@ def load_pools():
                     "par": str(r.get("par", "POOL/USD")),
                     "rede": str(r.get("rede", "DEX")),
                     "estado": str(r.get("estado", "Ativa")),
-                    "valor_inicial": float(r.get("valor_inicial", 0)),
-                    "valor_atual": float(r.get("valor_atual", 0)),
-                    "fees": float(r.get("fees", 0)),
-                    "range_min": float(r.get("range_min", 0)),
-                    "range_max": float(r.get("range_max", 0)),
+                    "valor_inicial": float(r.get("valor_inicial", 0) or 0),
+                    "valor_atual": float(r.get("valor_atual", 0) or 0),
+                    "fees": float(r.get("fees", 0) or 0),
+                    "range_min": float(r.get("range_min", 0) or 0),
+                    "range_max": float(r.get("range_max", 0) or 0),
                     "data_entrada": dt_ent,
-                    "wallet_address": str(r.get("wallet_address", "")),
+                    "wallet_address": str(r.get("wallet_address", "") or ""),
                     "preco_atual": float(r.get("preco_atual", 0.0) or 0.0),
                     "preco_nativo": float(r.get("preco_nativo", 0.0) or 0.0),
                     "horas_inativa": float(r.get("horas_inativa", 0.0) or 0.0),
@@ -216,14 +231,15 @@ def fetch_dexscreener_pair_price(pair_address):
     clean_addr = pair_address.strip()
     if not clean_addr:
         return None, None, None
-    url = f"https://api.dexscreener.com/latest/dex/pairs/solana/{clean_addr}"
+    url = f"https://api.dexscreener.com/latest/dex/search?q={clean_addr}"
     try:
         res = requests.get(url, timeout=6)
         if res.status_code == 200:
             data = res.json()
-            if data and "pair" in data and data["pair"]:
-                price_usd = float(data["pair"].get("priceUsd", 0))
-                price_native = float(data["pair"].get("priceNative", 0))
+            if data and "pairs" in data and len(data["pairs"]) > 0:
+                pair = data["pairs"][0]
+                price_usd = float(pair.get("priceUsd", 0))
+                price_native = float(pair.get("priceNative", 0))
                 return price_usd, price_native, "Ativa"
     except Exception:
         pass
@@ -243,11 +259,12 @@ def sync_pool_price_and_range(pool, force_sync=False):
             r_max = pool["range_max"]
             
             in_range = True
-            if r_min > 0 or r_max > 0:
-                if r_min > 0 and p_nat < r_min:
-                    in_range = False
-                if r_max > 0 and p_nat > r_max:
-                    in_range = False
+            if r_min > 0 and p_nat < r_min:
+                in_range = False
+                enviar_alerta_telegram(f"⚠️ *ALERTA (ABAIXO):* {pool['par']}\nPreço Nativo: `{p_nat}` | Mínimo: `{r_min}`")
+            if r_max > 0 and p_nat > r_max:
+                in_range = False
+                enviar_alerta_telegram(f"⚠️ *ALERTA (ACIMA):* {pool['par']}\nPreço Nativo: `{p_nat}` | Máximo: `{r_max}`")
             
             novo_estado = "Ativa" if in_range else "Inativa"
             novas_horas_inativa = pool.get("horas_inativa", 0.0)
@@ -334,6 +351,21 @@ def modal_tabela_resumo_historico():
 
     df_geral = pd.DataFrame(resumo_rows)
     st.dataframe(df_geral, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.subheader("🗑️ Gerir / Eliminar Pools do Histórico")
+    
+    # Lista com ação individual de eliminação
+    for p in pools_data:
+        col_info, col_btn = st.columns([4, 1])
+        with col_info:
+            st.write(f"**ID {p['id']} - {p['par']}** ({p['rede']}) — Status: `{p['estado']}`")
+        with col_btn:
+            if st.button("🗑️️ Eliminar", key=f"del_hist_{p['id']}", type="primary", use_container_width=True):
+                delete_pool_db(p["id"])
+                st.toast(f"Pool #{p['id']} eliminada do Supabase!", icon="🗑️")
+                time.sleep(0.5)
+                st.rerun()
 
 # MODAL DE SINCRONIZAÇÃO
 @st.dialog("🔄 Sincronização On-Chain (DexScreener)")
@@ -704,5 +736,3 @@ else:
                         plot_bgcolor="rgba(0,0,0,0)"
                     )
                     st.plotly_chart(fig_apr, use_container_width=True)
-
-            st.markdown("---")
