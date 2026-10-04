@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 import requests
 import pandas as pd
 import plotly.express as px
@@ -143,14 +144,14 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
                         "last_price_update": time.time()
                     }
                     if p_usd:
-                        patch_data["valor_atual"] = p_usd
+                        patch_data["preco_atual"] = p_usd
                         
                     requests.patch(patch_url, headers=headers, json=patch_data)
     st.sidebar.success("Atualizado com sucesso!")
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS (Com leitura da coluna 'fees')
+# 5. CÁLCULO DE MÉTRICAS COMPLETO
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
@@ -163,11 +164,10 @@ pools_processadas = []
 for p in pools:
     v_inv = to_float(p.get("valor_inicial"))
     v_at = to_float(p.get("valor_atual"))
-    v_fees = to_float(p.get("fees"))  # Mapeado diretamente para a tua coluna 'fees'
+    v_fees = to_float(p.get("fees"))
     
     v_atual_final = v_at if v_at > 0 else v_inv
     
-    # PnL líquido = (Valor Atual + Fees) - Valor Inicial
     pnl_pool = (v_atual_final + v_fees) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
 
@@ -208,7 +208,7 @@ c_kpi5.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}"
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO
+# 7. POSIÇÕES EM MONITORIZAÇÃO (Com Horas Inativa & Last Update)
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -225,6 +225,7 @@ else:
         par = p.get("par", "Par N/A")
         estado = p.get("estado", "Ativa")
         p_nat = to_float(p.get("preco_nativo"))
+        p_usd = to_float(p.get("preco_atual"))
         r_min = to_float(p.get("range_min"))
         r_max = to_float(p.get("range_max"))
         v_inv = p["v_inicial_calc"]
@@ -233,25 +234,39 @@ else:
         pnl_pool = p["pnl_pool"]
         roi_pool = p["roi_pool"]
         data_ent = p.get("data_entrada", "N/A")
+        hrs_inativa = to_float(p.get("horas_inativa"))
+        last_upd = p.get("last_price_update")
         addr = p.get("wallet_address", "")
 
+        # Formatação de data da última atualização
+        last_upd_str = "N/A"
+        if last_upd and to_float(last_upd) > 0:
+            try:
+                last_upd_str = datetime.fromtimestamp(to_float(last_upd)).strftime('%Y-%m-%d %H:%M')
+            except Exception:
+                last_upd_str = str(last_upd)
+
         is_active = (estado == "Ativa")
-        badge_html = '<span class="badge-active">🟢 EM RANGE</span>' if is_active else '<span class="badge-inactive">🔴 FORA DE RANGE</span>'
+        if is_active:
+            badge_html = '<span class="badge-active">🟢 EM RANGE</span>'
+        else:
+            badge_html = f'<span class="badge-inactive">🔴 FORA DE RANGE ({hrs_inativa:.1f}h)</span>'
+        
         card_class = "pool-card pool-card-active" if is_active else "pool-card pool-card-inactive"
 
         with st.container():
             st.markdown(f"""
             <div class="{card_class}">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <h3 style="margin:0; font-size: 1.3rem;">{par} <span style="font-size: 0.9rem; color: #a0aec0; font-weight: normal;">(Entrada: {data_ent})</span></h3>
+                    <h3 style="margin:0; font-size: 1.3rem;">{par} <span style="font-size: 0.85rem; color: #a0aec0; font-weight: normal;">(Entrada: {data_ent} | Atualizado: {last_upd_str})</span></h3>
                     {badge_html}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
             col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
-            col_a.metric("Preço Nativo", f"{p_nat:.6f}")
-            col_b.metric("Range", f"{r_min:.6f} - {r_max:.6f}")
+            col_a.metric("Preço Nativo / USD", f"{p_nat:.6f}", delta=f"${p_usd:.4f}" if p_usd > 0 else None)
+            col_b.metric("Range Definição", f"{r_min:.6f} - {r_max:.6f}")
             col_c.metric("Investido", f"${v_inv:,.2f}")
             col_d.metric("Valor Atual", f"${v_at:,.2f}")
             col_e.metric("Fees Geradas 💸", f"${v_fees:,.2f}")
@@ -336,7 +351,9 @@ with st.expander("⚙️ Gestão de Pools (Adicionar Nova / Tabela Completa)"):
                         "range_min": rmin_in,
                         "range_max": rmax_in,
                         "preco_nativo": p_nat or 0,
-                        "estado": "Ativa"
+                        "preco_atual": p_usd or 0,
+                        "estado": "Ativa",
+                        "horas_inativa": 0.0
                     }
                     res = requests.post(f"{SUPABASE_URL}/rest/v1/pools", headers=headers, json=payload)
                     if res.status_code in [200, 201]:
