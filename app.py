@@ -150,6 +150,7 @@ filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Todas", "Ativas �
 st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
     with st.spinner("A consultar DexScreener..."):
+        agora = time.time()
         for p in pools:
             addr = p.get("wallet_address")
             if addr:
@@ -166,11 +167,29 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
                     
                     novo_estado = "Ativa" if in_range else "Inativa"
                     
+                    # Cálculo/Acumulação de Horas Inativas em tempo real
+                    estado_anterior = p.get("estado", "Ativa")
+                    last_update = to_float(p.get("last_price_update"))
+                    horas_inativas_atuais = to_float(p.get("horas_inativa"))
+                    
+                    if novo_estado == "Inativa":
+                        if estado_anterior == "Inativa" and last_update > 0:
+                            # Calcula horas passadas desde a última atualização
+                            horas_decorridas = (agora - last_update) / 3600.0
+                            novas_horas_inativa = horas_inativas_atuais + horas_decorridas
+                        else:
+                            # Se acabou de ficar inativa nesta sincronização
+                            novas_horas_inativa = horas_inativas_atuais
+                    else:
+                        # Se regressou a Ativa, pode manter ou zerar conforme a tua preferência
+                        novas_horas_inativa = horas_inativas_atuais
+                    
                     patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{p['id']}"
                     patch_data = {
                         "preco_nativo": p_nat,
                         "estado": novo_estado,
-                        "last_price_update": time.time()
+                        "horas_inativa": novas_horas_inativa,
+                        "last_price_update": agora
                     }
                     if p_usd:
                         patch_data["preco_atual"] = p_usd
