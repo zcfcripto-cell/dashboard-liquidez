@@ -50,13 +50,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. LIGAÇÃO AO SUPABASE & CREDENCIAIS
+# 2. LIGAÇÃO AO SUPABASE & CREDENCIAIS TELEGRAM
 # -----------------------------------------------------------------------------
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", "")).strip().rstrip("/")
 if SUPABASE_URL and not SUPABASE_URL.startswith("http"):
     SUPABASE_URL = f"https://{SUPABASE_URL}"
 
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", "")).strip()
+
+TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
+TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
+
+MARGEM_AVISO_PCT = 3.0  # Alerta preventivo se o preço estiver a menos de 3% do limite
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -68,6 +73,23 @@ headers = {
 # -----------------------------------------------------------------------------
 # 3. FUNÇÕES AUXILIARES
 # -----------------------------------------------------------------------------
+def send_telegram(message):
+    """ Envia notificação formatada para o Telegram """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=8)
+        return res.status_code == 200
+    except Exception:
+        return False
+
 def fetch_dexscreener_data(pair_address):
     if not pair_address or len(str(pair_address).strip()) < 5:
         return None, None
@@ -135,14 +157,13 @@ def calcular_dias_metricas(data_str, horas_inativa):
         return 1.0, 1.0
 
 def calcular_il(razao_preco):
-    """ Calcula Impermanent Loss standard com base no r = P_final / P_inicial """
     if razao_preco <= 0:
         return 0.0
     il = (2 * math.sqrt(razao_preco) / (1 + razao_preco)) - 1
     return il * 100
 
 # -----------------------------------------------------------------------------
-# 4. BARRA LATERAL & FILTROS
+# 4. BARRA LATERAL & FILTROS (Com Alertas Inteligentes no Telegram)
 # -----------------------------------------------------------------------------
 pools = get_pools()
 
@@ -151,10 +172,11 @@ filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Todas", "Ativas �
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
-    with st.spinner("A consultar DexScreener..."):
+    with st.spinner("A consultar DexScreener & A avaliar Alertas..."):
         agora = time.time()
         for p in pools:
             addr = p.get("wallet_address")
+            par = p.get("par", "Par N/A")
             if addr:
                 p_usd, p_nat = fetch_dexscreener_data(addr)
                 if p_nat is not None:
@@ -162,10 +184,15 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
                     r_max = to_float(p.get("range_max"))
                     
                     in_range = True
-                    if r_min > 0 and p_nat < r_min:
+                    desvio_txt = ""
+                    if r_max > 0 and p_nat > r_max:
                         in_range = False
-                    elif r_max > 0 and p_nat > r_max:
+                        pct = ((p_nat - r_max) / r_max) * 100
+                        desvio_txt = f"+{pct:.2f}% acima do máx"
+                    elif r_min > 0 and p_nat < r_min:
                         in_range = False
+                        pct = ((r_min - p_nat) / r_min) * 100
+                        desvio_txt = f"-{pct:.2f}% abaixo do mín"
                     
                     novo_estado = "Ativa" if in_range else "Inativa"
                     estado_anterior = p.get("estado", "Ativa")
@@ -181,6 +208,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
                     else:
                         novas_horas_inativa = horas_inativas_atuais
                     
+                    # Guardar alterações no Supabase
                     patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{p['id']}"
                     patch_data = {
                         "preco_nativo": p_nat,
@@ -192,7 +220,23 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
                         patch_data["preco_atual"] = p_usd
                         
                     requests.patch(patch_url, headers=headers, json=patch_data)
-    st.sidebar.success("Atualizado com sucesso!")
+
+                    # --- LÓGICA DE NOTIFICAÇÕES TELEGRAM ---
+                    if novo_estado == "Inativa" and estado_anterior == "Ativa":
+                        msg = f"🚨 <b>ALERTA: POOL FORA DE RANGE</b>\n\n<b>Par:</b> {par}\n<b>Preço Nativo:</b> {format_crypto_price(p_nat)}\n<b>Range:</b> {format_crypto_price(r_min)} - {format_crypto_price(r_max)}\n<b>Desvio:</b> {desvio_txt}\n\n⚠️ Deixou de gerar fees."
+                        send_telegram(msg)
+                    elif novo_estado == "Ativa" and estado_anterior == "Inativa":
+                        msg = f"🟢 <b>POOL REGRESSOU AO RANGE</b>\n\n<b>Par:</b> {par}\n<b>Preço Nativo:</b> {format_crypto_price(p_nat)}\n<b>Range:</b> {format_crypto_price(r_min)} - {format_crypto_price(r_max)}\n\n✅ Voltou a gerar fees."
+                        send_telegram(msg)
+                    elif novo_estado == "Ativa":
+                        dist_min = ((p_nat - r_min) / r_min * 100) if r_min > 0 else 999
+                        dist_max = ((r_max - p_nat) / r_max * 100) if r_max > 0 else 999
+                        if dist_min <= MARGEM_AVISO_PCT:
+                            send_telegram(f"⚠️ <b>AVISO DE PROXIMIDADE (MÍN)</b>\n\n<b>Par:</b> {par}\n<b>Preço:</b> {format_crypto_price(p_nat)}\nApenas <b>{dist_min:.2f}%</b> do limite mínimo!")
+                        elif dist_max <= MARGEM_AVISO_PCT:
+                            send_telegram(f"⚠️ <b>AVISO DE PROXIMIDADE (MÁX)</b>\n\n<b>Par:</b> {par}\n<b>Preço:</b> {format_crypto_price(p_nat)}\nApenas <b>{dist_max:.2f}%</b> do limite máximo!")
+
+    st.sidebar.success("Atualizado & Notificações Avaliadas!")
     st.rerun()
 
 # -----------------------------------------------------------------------------
@@ -256,6 +300,21 @@ for p in pools:
 valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
+
+# Botão na Barra Lateral para Enviar Resumo Manual no Telegram
+if st.sidebar.button("📲 Enviar Resumo p/ Telegram", use_container_width=True):
+    msg_resumo = (
+        f"📊 <b>RESUMO DO PORTFÓLIO DEFI</b>\n\n"
+        f"💰 <b>Investido:</b> ${total_investido:,.2f}\n"
+        f"💵 <b>Valor em Pools:</b> ${total_valor_atual:,.2f}\n"
+        f"💸 <b>Fees Totais:</b> ${total_fees:,.2f}\n"
+        f"📈 <b>PnL Geral:</b> ${pnl_global:,.2f} ({roi_global:.2f}%)\n"
+        f"📌 <b>Estado:</b> 🟢 {total_ativas} Ativas | 🔴 {total_inativas} Inativas\n"
+    )
+    if send_telegram(msg_resumo):
+        st.sidebar.success("Resumo enviado com sucesso!")
+    else:
+        st.sidebar.error("Erro ao enviar. Verifica o Bot Token/Chat ID.")
 
 # -----------------------------------------------------------------------------
 # 6. EXIBIÇÃO DE KPIS
@@ -400,7 +459,7 @@ with col_g2:
         st.info("A aguardar histórico de PnL...")
 
 # -----------------------------------------------------------------------------
-# 9. FERRAMENTAS & GESTÃO (Sugestões 2 e 3)
+# 9. FERRAMENTAS & GESTÃO
 # -----------------------------------------------------------------------------
 st.markdown("---")
 st.subheader("🛠️ Ferramentas & Gestão de Posições")
@@ -445,105 +504,4 @@ with tab_add:
                     "data_entrada": data_ent_in,
                     "range_min": rmin_in,
                     "range_max": rmax_in,
-                    "preco_nativo": p_nat or 0,
-                    "preco_atual": p_usd or 0,
-                    "estado": "Ativa",
-                    "horas_inativa": 0.0
-                }
-                res = requests.post(f"{SUPABASE_URL}/rest/v1/pools", headers=headers, json=payload)
-                if res.status_code in [200, 201]:
-                    st.success("Pool adicionada com sucesso!")
-                    st.rerun()
-                else:
-                    st.error(f"Erro ao guardar: {res.text}")
-
-# TAB 2: Editar e Eliminar Posição (Sugestão 3)
-with tab_edit:
-    if not pools:
-        st.info("Não existem pools para editar.")
-    else:
-        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')}": p for p in pools}
-        escolha = st.selectbox("Selecione a Pool a Modificar:", list(lista_opcoes.keys()))
-        pool_sel = lista_opcoes[escolha]
-        
-        st.markdown(f"**Modificar Dados da Pool ID {pool_sel['id']} ({pool_sel.get('par')})**")
-        
-        with st.form("form_edit_pool"):
-            e1, e2, e3 = st.columns(3)
-            e_val_atual = e1.number_input("Valor Atual ($ USD)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
-            e_fees = e2.number_input("Fees Totais Acumuladas ($ USD)", value=to_float(pool_sel.get("fees")), step=1.0)
-            e_data_ent = e3.text_input("Data de Entrada (YYYY-MM-DD)", value=str(pool_sel.get("data_entrada", "")))
-
-            e4, e5, e6 = st.columns(3)
-            e_rmin = e4.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
-            e_rmax = e5.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
-            e_hrs_inativa = e6.number_input("Horas Inativa Manual", value=to_float(pool_sel.get("horas_inativa")), step=1.0)
-
-            btn_update = st.form_submit_button("💾 Guardar Alterações")
-
-            if btn_update:
-                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
-                update_payload = {
-                    "valor_atual": e_val_atual,
-                    "fees": e_fees,
-                    "data_entrada": e_data_ent,
-                    "range_min": e_rmin,
-                    "range_max": e_rmax,
-                    "horas_inativa": e_hrs_inativa
-                }
-                res = requests.patch(patch_url, headers=headers, json=update_payload)
-                if res.status_code in [200, 204]:
-                    st.success("Dados atualizados com sucesso no Supabase!")
-                    st.rerun()
-                else:
-                    st.error(f"Erro ao atualizar: {res.text}")
-
-        st.markdown("---")
-        with st.expander("🚨 Zona de Perigo - Encerrar/Eliminar Pool"):
-            st.warning("Ao confirmar, esta pool será removida permanentemente do Supabase.")
-            if st.button(f"🗑️ Eliminar Pool {pool_sel.get('par')} (ID {pool_sel['id']})", type="primary"):
-                del_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
-                del_res = requests.delete(del_url, headers=headers)
-                if del_res.status_code in [200, 204]:
-                    st.success("Pool eliminada com sucesso!")
-                    st.rerun()
-                else:
-                    st.error(f"Erro ao eliminar: {del_res.text}")
-
-# TAB 3: Calculadora de Rebalanceamento & IL (Sugestão 2)
-with tab_calc:
-    col_c1, col_c2 = st.columns(2)
-
-    with col_c1:
-        st.markdown("#### 🎯 Calculadora de Novos Ranges")
-        st.caption("Obtém os novos valores limite com base no preço atual do par para rebalancear a tua posição.")
-        
-        p_ref = st.number_input("Preço Nativo Atual do Par", min_value=0.0, value=0.000053, format="%.8f")
-        var_pct = st.slider("Amplitude do Range desejada (± %)", min_value=1.0, max_value=50.0, value=15.0, step=0.5)
-
-        if p_ref > 0:
-            novo_min = p_ref * (1 - (var_pct / 100))
-            novo_max = p_ref * (1 + (var_pct / 100))
-            
-            st.markdown(f"""
-            * **Novo Range Mínimo (-{var_pct}%):** `{format_crypto_price(novo_min)}`
-            * **Novo Range Máximo (+{var_pct}%):** `{format_crypto_price(novo_max)}`
-            """)
-
-    with col_c2:
-        st.markdown("#### 📉 Simulador de Impermanent Loss (IL)")
-        st.caption("Estima o impacto da variação de preço na tua posição em comparação com simplesmente guardar os tokens (HODL).")
-        
-        var_preco_simulada = st.slider("Variação do Preço face à entrada (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0)
-        
-        razao = 1 + (var_preco_simulada / 100.0)
-        il_resultado = calcular_il(razao)
-        
-        st.metric("Impermanent Loss Estimada", f"{il_resultado:.2f}%", delta=f"{il_resultado:.2f}%", delta_color="inverse")
-        st.info("Nota: A perda impermanente real numa pool concentrada (Uni v3 / Meteora) varia consoante a largura do range definido.")
-
-# TAB 4: Tabela Resumo
-with tab_table:
-    if pools:
-        df_display = pd.DataFrame(pools)
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+                    "preco
