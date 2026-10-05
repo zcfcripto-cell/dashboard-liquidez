@@ -111,7 +111,6 @@ def to_float(val, default=0.0):
         return default
 
 def format_crypto_price(val):
-    """ Formata o preço nativo garantindo precisão mesmo para micro-valores """
     v = to_float(val)
     if v == 0:
         return "0.00"
@@ -122,16 +121,23 @@ def format_crypto_price(val):
     else:
         return f"{v:.4f}"
 
-def calcular_dias_ativa(data_str):
-    """ Calcula quantos dias a posição está aberta a partir de data_entrada """
+def calcular_dias_metricas(data_str, horas_inativa):
+    """
+    Calcula os dias totais de calendário e os dias efetivamente ativos
+    descontando as horas que a pool esteve fora de range.
+    """
     if not data_str:
-        return 1
+        return 1.0, 1.0
     try:
         data_inicio = datetime.strptime(str(data_str).strip(), "%Y-%m-%d").date()
-        dias = (date.today() - data_inicio).days
-        return max(dias, 1) # Retorna pelo menos 1 dia para evitar divisão por 0
+        dias_totais = max((date.today() - data_inicio).days, 1)
+        
+        dias_inativos = to_float(horas_inativa) / 24.0
+        dias_ativos = max(dias_totais - dias_inativos, 0.1)  # Mínimo de 0.1 dias para evitar /0
+        
+        return float(dias_totais), float(dias_ativos)
     except Exception:
-        return 1
+        return 1.0, 1.0
 
 # -----------------------------------------------------------------------------
 # 4. BARRA LATERAL & FILTROS
@@ -174,7 +180,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO (Inclusão de Rendimento Diário e APR)
+# 5. CÁLCULO DE MÉTRICAS COMPLETO (Com Desconto do Tempo Inativo)
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
@@ -190,16 +196,17 @@ for p in pools:
     v_at = to_float(p.get("valor_atual"))
     v_fees = to_float(p.get("fees"))
     data_ent = p.get("data_entrada", "")
+    hrs_inativa = to_float(p.get("horas_inativa"))
     
     v_atual_final = v_at if v_at > 0 else v_inv
     
     pnl_pool = (v_atual_final + v_fees) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
 
-    # Cálculo de métricas temporais (Melhoria #1)
-    dias_ativa = calcular_dias_ativa(data_ent)
-    fees_dia = v_fees / dias_ativa
-    apr_real = ((v_fees / v_inv) / dias_ativa * 365 * 100) if v_inv > 0 else 0.0
+    # Cálculo ajustado descontando o tempo inativo
+    dias_totais, dias_ativos = calcular_dias_metricas(data_ent, hrs_inativa)
+    fees_dia = v_fees / dias_ativos
+    apr_real = ((v_fees / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
 
     total_investido += v_inv
     total_valor_atual += v_atual_final
@@ -218,7 +225,8 @@ for p in pools:
     p_item["fees_calc"] = v_fees
     p_item["pnl_pool"] = pnl_pool
     p_item["roi_pool"] = roi_pool
-    p_item["dias_ativa"] = dias_ativa
+    p_item["dias_totais"] = dias_totais
+    p_item["dias_ativos"] = dias_ativos
     p_item["fees_dia"] = fees_dia
     p_item["apr_real"] = apr_real
     pools_processadas.append(p_item)
@@ -228,7 +236,7 @@ pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
 # -----------------------------------------------------------------------------
-# 6. EXIBIÇÃO DE KPIS (6 Cartões)
+# 6. EXIBIÇÃO DE KPIS
 # -----------------------------------------------------------------------------
 st.title("⚡ Painel de Desempenho de Liquidez")
 
@@ -243,7 +251,7 @@ c_kpi6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}"
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (Com Fees/Dia e APR)
+# 7. POSIÇÕES EM MONITORIZAÇÃO
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -269,7 +277,7 @@ else:
         pnl_pool = p["pnl_pool"]
         roi_pool = p["roi_pool"]
         data_ent = p.get("data_entrada", "N/A")
-        dias_ativa = p["dias_ativa"]
+        dias_ativos = p["dias_ativos"]
         fees_dia = p["fees_dia"]
         apr_real = p["apr_real"]
         hrs_inativa = to_float(p.get("horas_inativa"))
@@ -287,7 +295,6 @@ else:
             pct_desvio = ((r_min - p_nat) / r_min) * 100
             tipo_desvio = f"-{pct_desvio:.2f}% mín"
 
-        # Formatação de timestamps legíveis
         last_upd_str = "N/A"
         if last_upd and to_float(last_upd) > 0:
             try:
@@ -307,7 +314,7 @@ else:
             st.markdown(f"""
             <div class="{card_class}">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <h3 style="margin:0; font-size: 1.3rem;">{par} <span style="font-size: 0.85rem; color: #a0aec0; font-weight: normal;">(Entrada: {data_ent} • {dias_ativa}d ativa | Atualizado: {last_upd_str})</span></h3>
+                    <h3 style="margin:0; font-size: 1.3rem;">{par} <span style="font-size: 0.85rem; color: #a0aec0; font-weight: normal;">(Entrada: {data_ent} • {dias_ativos:.1f}d ativa | Atualizado: {last_upd_str})</span></h3>
                     {badge_html}
                 </div>
             </div>
@@ -323,7 +330,7 @@ else:
             col_c.metric("Investido", f"${v_inv:,.2f}")
             col_d.metric("Valor Atual", f"${v_at:,.2f}")
             col_e.metric("Fees Totais", f"${v_fees:,.2f}")
-            col_f.metric("Fees / Dia", f"${fees_dia:,.2f}/d", delta=f"{apr_real:.1f}% APR")
+            col_f.metric("Fees / Dia Ativo", f"${fees_dia:,.2f}/d", delta=f"{apr_real:.1f}% APR")
             col_g.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
 
             if addr:
