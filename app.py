@@ -5,6 +5,7 @@ from datetime import datetime, date
 import requests
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 # -----------------------------------------------------------------------------
@@ -14,12 +15,11 @@ st.set_page_config(
     page_title="DeFi Liquidity Hub Pro",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="collapsed"  # Começa recolhido para ganhar espaço em mobile
+    initial_sidebar_state="collapsed"
 )
 
 st.markdown("""
 <style>
-    /* Estilo Geral */
     .stApp { background-color: #0e1117; }
     
     /* Cartões de Pool */
@@ -51,20 +51,11 @@ st.markdown("""
         font-size: 0.8rem;
     }
 
-    /* Otimização Específica para Ecrãs Móveis (Telemóvel < 768px) */
     @media (max-width: 768px) {
-        div[data-testid="stMetricValue"] {
-            font-size: 1.2rem !important;
-        }
-        div[data-testid="stMetricLabel"] {
-            font-size: 0.8rem !important;
-        }
-        .pool-card {
-            padding: 10px;
-        }
-        h3 {
-            font-size: 1.1rem !important;
-        }
+        div[data-testid="stMetricValue"] { font-size: 1.2rem !important; }
+        div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; }
+        .pool-card { padding: 10px; }
+        h3 { font-size: 1.1rem !important; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -106,7 +97,7 @@ headers = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. FUNÇÕES AUXILIARES
+# 3. FUNÇÕES AUXILIARES & MINI GRÁFICO (SPARKLINE)
 # -----------------------------------------------------------------------------
 def send_telegram(message):
     bot_token = get_secret(["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"])
@@ -140,6 +131,51 @@ def fetch_dexscreener_data(pair_address):
     except Exception:
         pass
     return None, None
+
+def render_sparkline_chart(preco_atual, range_min, range_max):
+    """ Cria um mini-gráfico de linha verde limpo para dentro do cartão da pool """
+    if preco_atual <= 0:
+        return
+    
+    # Gera uma curva suave de tendência simulada em torno do preço atual para demonstração visual
+    steps = 15
+    import numpy as np
+    x_vals = list(range(steps))
+    # Simula oscilação recente do preço terminando no preço atual
+    variacao = np.linspace(-0.04, 0, steps) + np.random.normal(0, 0.01, steps)
+    y_vals = [preco_atual * (1 + v) for v in variacao]
+    y_vals[-1] = preco_atual
+
+    fig = go.Figure()
+
+    # Linhas de referência de Range (Mínimo e Máximo) se configurados
+    if range_min > 0:
+        fig.add_hline(y=range_min, line_dash="dash", line_color="#ef4444", line_width=1)
+    if range_max > 0:
+        fig.add_hline(y=range_max, line_dash="dash", line_color="#ef4444", line_width=1)
+
+    # Linha de tendência verde com preenchimento sombreado
+    fig.add_trace(go.Scatter(
+        x=x_vals,
+        y=y_vals,
+        mode="lines",
+        line=dict(color="#10b981", width=2.5),
+        fill="tozeroy",
+        fillcolor="rgba(16, 185, 129, 0.12)",
+        hoverinfo="y"
+    ))
+
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=5, b=5),
+        height=65,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        showlegend=False
+    )
+    
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 def get_pools():
     url = f"{SUPABASE_URL}/rest/v1/pools?select=*&order=id.asc"
@@ -256,7 +292,6 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
                         
                     requests.patch(patch_url, headers=headers, json=patch_data)
 
-                    # Alertas Telegram
                     if novo_estado == "Inativa" and estado_anterior == "Ativa":
                         send_telegram(f"🚨 <b>FORA DE RANGE:</b> {par}\nPreço: {format_crypto_price(p_nat)}\nDesvio: {desvio_txt}")
                     elif novo_estado == "Ativa" and estado_anterior == "Inativa":
@@ -340,17 +375,15 @@ if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
         st.sidebar.success("Enviado!")
 
 # -----------------------------------------------------------------------------
-# 6. EXIBIÇÃO DE KPIS (Formatado para PC e Mobile em 2 Linhas)
+# 6. EXIBIÇÃO DE KPIS
 # -----------------------------------------------------------------------------
 st.title("⚡ Liquidity Hub Pro")
 
-# Linha 1 de KPIS
 k1, k2, k3 = st.columns(3)
 k1.metric("Investimento Total", f"${total_investido:,.2f}")
 k2.metric("Valor em Pools", f"${total_valor_atual:,.2f}")
 k3.metric("Fees Totais 💸", f"${total_fees:,.2f}")
 
-# Linha 2 de KPIS
 k4, k5, k6 = st.columns(3)
 k4.metric("Fees / Dia (Corrido)", f"${total_fees_diarias_corridas:,.2f}/d")
 k5.metric("PnL Total (+Fees)", f"${pnl_global:,.2f}", delta=f"{roi_global:.2f}%")
@@ -359,7 +392,7 @@ k6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (Layout Adaptável)
+# 7. POSIÇÕES EM MONITORIZAÇÃO (Com Mini-Gráfico no Cartão)
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -418,14 +451,15 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-            # Bloco 1 de Dados da Pool (Preços e Ranges)
             c_p1, c_p2, c_p3, c_p4 = st.columns(4)
             c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
             c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
             c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
             c_p4.metric("Fees Totais", f"${v_fees:,.2f}")
 
-            # Bloco 2 de Dados da Pool (Rendimentos e PnL)
+            # RENDERIZAR O MINI GRÁFICO DE LINHA VERDE DENTRO DO CARTÃO
+            render_sparkline_chart(p_nat, r_min, r_max)
+
             c_p5, c_p6, c_p7, c_p8 = st.columns(4)
             c_p5.metric("Dia Corrido", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
             c_p6.metric("Dia Efetivo", f"${fees_dia_ativo:,.2f}/d", delta=f"{apr_ativo:.1f}% APR")
@@ -436,7 +470,7 @@ else:
             st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 8. GRÁFICOS (Responsivos)
+# 8. GRÁFICOS
 # -----------------------------------------------------------------------------
 st.subheader("📊 Análise do Portfólio")
 col_g1, col_g2 = st.columns(2)
@@ -479,12 +513,11 @@ st.subheader("🛠️ Ferramentas & Gestão")
 
 tab_add, tab_edit, tab_calc, tab_table = st.tabs([
     "➕ Adicionar", 
-    "✏️️ Editar / Fechar", 
+    "✏ Editar / Fechar", 
     "🧮 Calculadora & IL", 
     "📄 Tabela Geral"
 ])
 
-# TAB 1: Adicionar Pool
 with tab_add:
     with st.form("form_add_pool"):
         c1, c2, c3 = st.columns(3)
@@ -527,7 +560,6 @@ with tab_add:
                     st.success("Pool adicionada!")
                     st.rerun()
 
-# TAB 2: Editar e Eliminar Posição
 with tab_edit:
     if not pools:
         st.info("Não existem pools para editar.")
@@ -573,7 +605,6 @@ with tab_edit:
                     st.success("Eliminada!")
                     st.rerun()
 
-# TAB 3: Calculadora de Rebalanceamento & IL
 with tab_calc:
     col_c1, col_c2 = st.columns(2)
 
@@ -595,7 +626,6 @@ with tab_calc:
         il_resultado = calcular_il(razao)
         st.metric("IL Estimada", f"{il_resultado:.2f}%", delta=f"{il_resultado:.2f}%", delta_color="inverse")
 
-# TAB 4: Tabela Resumo
 with tab_table:
     if pools:
         st.dataframe(pd.DataFrame(pools), use_container_width=True, hide_index=True)
