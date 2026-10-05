@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime
+from datetime import datetime, date
 import requests
 import pandas as pd
 import plotly.express as px
@@ -19,7 +19,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
-    div[data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700 !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.7rem !important; font-weight: 700 !important; }
     .pool-card {
         background-color: #1a1f2c;
         border-radius: 12px;
@@ -122,6 +122,17 @@ def format_crypto_price(val):
     else:
         return f"{v:.4f}"
 
+def calcular_dias_ativa(data_str):
+    """ Calcula quantos dias a posição está aberta a partir de data_entrada """
+    if not data_str:
+        return 1
+    try:
+        data_inicio = datetime.strptime(str(data_str).strip(), "%Y-%m-%d").date()
+        dias = (date.today() - data_inicio).days
+        return max(dias, 1) # Retorna pelo menos 1 dia para evitar divisão por 0
+    except Exception:
+        return 1
+
 # -----------------------------------------------------------------------------
 # 4. BARRA LATERAL & FILTROS
 # -----------------------------------------------------------------------------
@@ -163,11 +174,12 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO
+# 5. CÁLCULO DE MÉTRICAS COMPLETO (Inclusão de Rendimento Diário e APR)
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
 total_fees = 0.0
+total_fees_diarias = 0.0
 total_ativas = 0
 total_inativas = 0
 
@@ -177,15 +189,22 @@ for p in pools:
     v_inv = to_float(p.get("valor_inicial"))
     v_at = to_float(p.get("valor_atual"))
     v_fees = to_float(p.get("fees"))
+    data_ent = p.get("data_entrada", "")
     
     v_atual_final = v_at if v_at > 0 else v_inv
     
     pnl_pool = (v_atual_final + v_fees) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
 
+    # Cálculo de métricas temporais (Melhoria #1)
+    dias_ativa = calcular_dias_ativa(data_ent)
+    fees_dia = v_fees / dias_ativa
+    apr_real = ((v_fees / v_inv) / dias_ativa * 365 * 100) if v_inv > 0 else 0.0
+
     total_investido += v_inv
     total_valor_atual += v_atual_final
     total_fees += v_fees
+    total_fees_diarias += fees_dia
 
     estado = p.get("estado", "Ativa")
     if estado == "Ativa":
@@ -199,6 +218,9 @@ for p in pools:
     p_item["fees_calc"] = v_fees
     p_item["pnl_pool"] = pnl_pool
     p_item["roi_pool"] = roi_pool
+    p_item["dias_ativa"] = dias_ativa
+    p_item["fees_dia"] = fees_dia
+    p_item["apr_real"] = apr_real
     pools_processadas.append(p_item)
 
 valor_total_com_fees = total_valor_atual + total_fees
@@ -206,21 +228,22 @@ pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
 # -----------------------------------------------------------------------------
-# 6. EXIBIÇÃO DE KPIS (Métricas Gerais)
+# 6. EXIBIÇÃO DE KPIS (6 Cartões)
 # -----------------------------------------------------------------------------
 st.title("⚡ Painel de Desempenho de Liquidez")
 
-c_kpi1, c_kpi2, c_kpi3, c_kpi4, c_kpi5 = st.columns(5)
+c_kpi1, c_kpi2, c_kpi3, c_kpi4, c_kpi5, c_kpi6 = st.columns(6)
 c_kpi1.metric("Investimento Total", f"${total_investido:,.2f}")
 c_kpi2.metric("Valor em Pools", f"${total_valor_atual:,.2f}")
 c_kpi3.metric("Fees Geradas 💸", f"${total_fees:,.2f}")
-c_kpi4.metric("PnL Total (+Fees)", f"${pnl_global:,.2f}", delta=f"{roi_global:.2f}%")
-c_kpi5.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
+c_kpi4.metric("Média Fees / Dia", f"${total_fees_diarias:,.2f}/dia")
+c_kpi5.metric("PnL Total (+Fees)", f"${pnl_global:,.2f}", delta=f"{roi_global:.2f}%")
+c_kpi6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (Com % de Desvio Mín/Máx)
+# 7. POSIÇÕES EM MONITORIZAÇÃO (Com Fees/Dia e APR)
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -246,11 +269,14 @@ else:
         pnl_pool = p["pnl_pool"]
         roi_pool = p["roi_pool"]
         data_ent = p.get("data_entrada", "N/A")
+        dias_ativa = p["dias_ativa"]
+        fees_dia = p["fees_dia"]
+        apr_real = p["apr_real"]
         hrs_inativa = to_float(p.get("horas_inativa"))
         last_upd = p.get("last_price_update")
         addr = p.get("wallet_address", "")
 
-        # Cálculo exato do Desvio %
+        # Cálculo do Desvio %
         pct_desvio = 0.0
         tipo_desvio = "EM RANGE"
 
@@ -281,25 +307,24 @@ else:
             st.markdown(f"""
             <div class="{card_class}">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <h3 style="margin:0; font-size: 1.3rem;">{par} <span style="font-size: 0.85rem; color: #a0aec0; font-weight: normal;">(Entrada: {data_ent} | Atualizado: {last_upd_str})</span></h3>
+                    <h3 style="margin:0; font-size: 1.3rem;">{par} <span style="font-size: 0.85rem; color: #a0aec0; font-weight: normal;">(Entrada: {data_ent} • {dias_ativa}d ativa | Atualizado: {last_upd_str})</span></h3>
                     {badge_html}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
+            col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns(7)
             
-            # Preço Nativo com Formatação de Precisão
-            col_a.metric("Preço Nativo / USD", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
+            col_a.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
             
-            # Limites e Delta do Desvio
             delta_range = f"{tipo_desvio}" if not is_active else "OK"
             col_b.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}", delta=delta_range, delta_color="inverse" if not is_active else "normal")
             
             col_c.metric("Investido", f"${v_inv:,.2f}")
             col_d.metric("Valor Atual", f"${v_at:,.2f}")
-            col_e.metric("Fees Geradas 💸", f"${v_fees:,.2f}")
-            col_f.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
+            col_e.metric("Fees Totais", f"${v_fees:,.2f}")
+            col_f.metric("Fees / Dia", f"${fees_dia:,.2f}/d", delta=f"{apr_real:.1f}% APR")
+            col_g.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
 
             if addr:
                 st.markdown(f"[🔍 Abrir no DexScreener](https://dexscreener.com/search?q={addr})")
