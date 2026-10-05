@@ -19,7 +19,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
-    div[data-testid="stMetricValue"] { font-size: 1.7rem !important; font-weight: 700 !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 700 !important; }
     .pool-card {
         background-color: #1a1f2c;
         border-radius: 12px;
@@ -123,24 +123,23 @@ def format_crypto_price(val):
 
 def calcular_dias_metricas(data_str, horas_inativa):
     """
-    Calcula os dias totais de calendário e os dias efetivamente ativos
-    descontando as horas que a pool esteve fora de range.
+    Calcula dias corridos totais e dias efetivos em range.
     """
     if not data_str:
         return 1.0, 1.0
     try:
         data_inicio = datetime.strptime(str(data_str).strip(), "%Y-%m-%d").date()
-        dias_totais = max((date.today() - data_inicio).days, 1)
+        dias_corridos = max((date.today() - data_inicio).days, 1)
         
         dias_inativos = to_float(horas_inativa) / 24.0
-        dias_ativos = max(dias_totais - dias_inativos, 0.1)  # Mínimo de 0.1 dias para evitar /0
+        dias_ativos = max(dias_corridos - dias_inativos, 0.1)
         
-        return float(dias_totais), float(dias_ativos)
+        return float(dias_corridos), float(dias_ativos)
     except Exception:
         return 1.0, 1.0
 
 # -----------------------------------------------------------------------------
-# 4. BARRA LATERAL & FILTROS
+# 4. BARRA LATERAL & FILTROS (Com Acumulação de Horas Inativas)
 # -----------------------------------------------------------------------------
 pools = get_pools()
 
@@ -167,21 +166,17 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
                     
                     novo_estado = "Ativa" if in_range else "Inativa"
                     
-                    # Cálculo/Acumulação de Horas Inativas em tempo real
                     estado_anterior = p.get("estado", "Ativa")
                     last_update = to_float(p.get("last_price_update"))
                     horas_inativas_atuais = to_float(p.get("horas_inativa"))
                     
                     if novo_estado == "Inativa":
                         if estado_anterior == "Inativa" and last_update > 0:
-                            # Calcula horas passadas desde a última atualização
                             horas_decorridas = (agora - last_update) / 3600.0
                             novas_horas_inativa = horas_inativas_atuais + horas_decorridas
                         else:
-                            # Se acabou de ficar inativa nesta sincronização
                             novas_horas_inativa = horas_inativas_atuais
                     else:
-                        # Se regressou a Ativa, pode manter ou zerar conforme a tua preferência
                         novas_horas_inativa = horas_inativas_atuais
                     
                     patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{p['id']}"
@@ -199,12 +194,13 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO (Com Desconto do Tempo Inativo)
+# 5. CÁLCULO DE MÉTRICAS COMPLETO (Corridos vs. Ativos)
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
 total_fees = 0.0
-total_fees_diarias = 0.0
+total_fees_diarias_corridas = 0.0
+total_fees_diarias_ativas = 0.0
 total_ativas = 0
 total_inativas = 0
 
@@ -222,15 +218,22 @@ for p in pools:
     pnl_pool = (v_atual_final + v_fees) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
 
-    # Cálculo ajustado descontando o tempo inativo
-    dias_totais, dias_ativos = calcular_dias_metricas(data_ent, hrs_inativa)
-    fees_dia = v_fees / dias_ativos
-    apr_real = ((v_fees / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
+    # Prazos e métricas
+    dias_corridos, dias_ativos = calcular_dias_metricas(data_ent, hrs_inativa)
+    
+    # Cálculos por Dia Corrido
+    fees_dia_corrido = v_fees / dias_corridos
+    apr_corrido = ((v_fees / v_inv) / dias_corridos * 365 * 100) if v_inv > 0 else 0.0
+
+    # Cálculos por Dia Ativo (Descontando inatividade)
+    fees_dia_ativo = v_fees / dias_ativos
+    apr_ativo = ((v_fees / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
 
     total_investido += v_inv
     total_valor_atual += v_atual_final
     total_fees += v_fees
-    total_fees_diarias += fees_dia
+    total_fees_diarias_corridas += fees_dia_corrido
+    total_fees_diarias_ativas += fees_dia_ativo
 
     estado = p.get("estado", "Ativa")
     if estado == "Ativa":
@@ -244,10 +247,12 @@ for p in pools:
     p_item["fees_calc"] = v_fees
     p_item["pnl_pool"] = pnl_pool
     p_item["roi_pool"] = roi_pool
-    p_item["dias_totais"] = dias_totais
+    p_item["dias_corridos"] = dias_corridos
     p_item["dias_ativos"] = dias_ativos
-    p_item["fees_dia"] = fees_dia
-    p_item["apr_real"] = apr_real
+    p_item["fees_dia_corrido"] = fees_dia_corrido
+    p_item["apr_corrido"] = apr_corrido
+    p_item["fees_dia_ativo"] = fees_dia_ativo
+    p_item["apr_ativo"] = apr_ativo
     pools_processadas.append(p_item)
 
 valor_total_com_fees = total_valor_atual + total_fees
@@ -255,7 +260,7 @@ pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
 # -----------------------------------------------------------------------------
-# 6. EXIBIÇÃO DE KPIS
+# 6. EXIBIÇÃO DE KPIS (Cartões Gerais)
 # -----------------------------------------------------------------------------
 st.title("⚡ Painel de Desempenho de Liquidez")
 
@@ -263,14 +268,14 @@ c_kpi1, c_kpi2, c_kpi3, c_kpi4, c_kpi5, c_kpi6 = st.columns(6)
 c_kpi1.metric("Investimento Total", f"${total_investido:,.2f}")
 c_kpi2.metric("Valor em Pools", f"${total_valor_atual:,.2f}")
 c_kpi3.metric("Fees Geradas 💸", f"${total_fees:,.2f}")
-c_kpi4.metric("Média Fees / Dia", f"${total_fees_diarias:,.2f}/dia")
+c_kpi4.metric("Fees / Dia (Corrido)", f"${total_fees_diarias_corridas:,.2f}/d")
 c_kpi5.metric("PnL Total (+Fees)", f"${pnl_global:,.2f}", delta=f"{roi_global:.2f}%")
 c_kpi6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO
+# 7. POSIÇÕES EM MONITORIZAÇÃO (Com métricas Corridas & Ativas)
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -296,9 +301,14 @@ else:
         pnl_pool = p["pnl_pool"]
         roi_pool = p["roi_pool"]
         data_ent = p.get("data_entrada", "N/A")
+        
+        dias_corridos = p["dias_corridos"]
         dias_ativos = p["dias_ativos"]
-        fees_dia = p["fees_dia"]
-        apr_real = p["apr_real"]
+        fees_dia_corrido = p["fees_dia_corrido"]
+        apr_corrido = p["apr_corrido"]
+        fees_dia_ativo = p["fees_dia_ativo"]
+        apr_ativo = p["apr_ativo"]
+        
         hrs_inativa = to_float(p.get("horas_inativa"))
         last_upd = p.get("last_price_update")
         addr = p.get("wallet_address", "")
@@ -333,13 +343,13 @@ else:
             st.markdown(f"""
             <div class="{card_class}">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <h3 style="margin:0; font-size: 1.3rem;">{par} <span style="font-size: 0.85rem; color: #a0aec0; font-weight: normal;">(Entrada: {data_ent} • {dias_ativos:.1f}d ativa | Atualizado: {last_upd_str})</span></h3>
+                    <h3 style="margin:0; font-size: 1.3rem;">{par} <span style="font-size: 0.85rem; color: #a0aec0; font-weight: normal;">(Entrada: {data_ent} • {dias_corridos:.0f}d corridos / {dias_ativos:.1f}d ativos | Atualizado: {last_upd_str})</span></h3>
                     {badge_html}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            col_a, col_b, col_c, col_d, col_e, col_f, col_g = st.columns(7)
+            col_a, col_b, col_c, col_d, col_e, col_f, col_g, col_h = st.columns(8)
             
             col_a.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
             
@@ -349,8 +359,9 @@ else:
             col_c.metric("Investido", f"${v_inv:,.2f}")
             col_d.metric("Valor Atual", f"${v_at:,.2f}")
             col_e.metric("Fees Totais", f"${v_fees:,.2f}")
-            col_f.metric("Fees / Dia Ativo", f"${fees_dia:,.2f}/d", delta=f"{apr_real:.1f}% APR")
-            col_g.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
+            col_f.metric("Dia Corrido", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
+            col_g.metric("Dia Efetivo", f"${fees_dia_ativo:,.2f}/d", delta=f"{apr_ativo:.1f}% APR")
+            col_h.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
 
             if addr:
                 st.markdown(f"[🔍 Abrir no DexScreener](https://dexscreener.com/search?q={addr})")
