@@ -1,5 +1,6 @@
 import os
 import time
+import math
 from datetime import datetime, date
 import requests
 import pandas as pd
@@ -122,24 +123,26 @@ def format_crypto_price(val):
         return f"{v:.4f}"
 
 def calcular_dias_metricas(data_str, horas_inativa):
-    """
-    Calcula dias corridos totais e dias efetivos em range.
-    """
     if not data_str:
         return 1.0, 1.0
     try:
         data_inicio = datetime.strptime(str(data_str).strip(), "%Y-%m-%d").date()
         dias_corridos = max((date.today() - data_inicio).days, 1)
-        
         dias_inativos = to_float(horas_inativa) / 24.0
         dias_ativos = max(dias_corridos - dias_inativos, 0.1)
-        
         return float(dias_corridos), float(dias_ativos)
     except Exception:
         return 1.0, 1.0
 
+def calcular_il(razao_preco):
+    """ Calcula Impermanent Loss standard com base no r = P_final / P_inicial """
+    if razao_preco <= 0:
+        return 0.0
+    il = (2 * math.sqrt(razao_preco) / (1 + razao_preco)) - 1
+    return il * 100
+
 # -----------------------------------------------------------------------------
-# 4. BARRA LATERAL & FILTROS (Com Acumulação de Horas Inativas)
+# 4. BARRA LATERAL & FILTROS
 # -----------------------------------------------------------------------------
 pools = get_pools()
 
@@ -165,7 +168,6 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
                         in_range = False
                     
                     novo_estado = "Ativa" if in_range else "Inativa"
-                    
                     estado_anterior = p.get("estado", "Ativa")
                     last_update = to_float(p.get("last_price_update"))
                     horas_inativas_atuais = to_float(p.get("horas_inativa"))
@@ -194,7 +196,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo Agora", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO (Corridos vs. Ativos)
+# 5. CÁLCULO DE MÉTRICAS COMPLETO
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
@@ -214,18 +216,14 @@ for p in pools:
     hrs_inativa = to_float(p.get("horas_inativa"))
     
     v_atual_final = v_at if v_at > 0 else v_inv
-    
     pnl_pool = (v_atual_final + v_fees) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
 
-    # Prazos e métricas
     dias_corridos, dias_ativos = calcular_dias_metricas(data_ent, hrs_inativa)
     
-    # Cálculos por Dia Corrido
     fees_dia_corrido = v_fees / dias_corridos
     apr_corrido = ((v_fees / v_inv) / dias_corridos * 365 * 100) if v_inv > 0 else 0.0
 
-    # Cálculos por Dia Ativo (Descontando inatividade)
     fees_dia_ativo = v_fees / dias_ativos
     apr_ativo = ((v_fees / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
 
@@ -260,7 +258,7 @@ pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
 # -----------------------------------------------------------------------------
-# 6. EXIBIÇÃO DE KPIS (Cartões Gerais)
+# 6. EXIBIÇÃO DE KPIS
 # -----------------------------------------------------------------------------
 st.title("⚡ Painel de Desempenho de Liquidez")
 
@@ -275,7 +273,7 @@ c_kpi6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}"
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (Com métricas Corridas & Ativas)
+# 7. POSIÇÕES EM MONITORIZAÇÃO
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -313,7 +311,6 @@ else:
         last_upd = p.get("last_price_update")
         addr = p.get("wallet_address", "")
 
-        # Cálculo do Desvio %
         pct_desvio = 0.0
         tipo_desvio = "EM RANGE"
 
@@ -350,7 +347,6 @@ else:
             """, unsafe_allow_html=True)
 
             col_a, col_b, col_c, col_d, col_e, col_f, col_g, col_h = st.columns(8)
-            
             col_a.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
             
             delta_range = f"{tipo_desvio}" if not is_active else "OK"
@@ -404,56 +400,150 @@ with col_g2:
         st.info("A aguardar histórico de PnL...")
 
 # -----------------------------------------------------------------------------
-# 9. GESTÃO & TABELA COMPLETA
+# 9. FERRAMENTAS & GESTÃO (Sugestões 2 e 3)
 # -----------------------------------------------------------------------------
-with st.expander("⚙️ Gestão de Pools (Adicionar Nova / Tabela Completa)"):
-    tab_add, tab_table = st.tabs(["➕ Adicionar Pool", "📄 Ver Tabela Resumo"])
+st.markdown("---")
+st.subheader("🛠️ Ferramentas & Gestão de Posições")
 
-    with tab_add:
-        with st.form("form_add_pool"):
-            c1, c2, c3 = st.columns(3)
-            par_in = c1.text_input("Nome do Par (ex: PUMP/SOL)", "")
-            addr_in = c2.text_input("Pair Address (DexScreener)", "")
-            invest_in = c3.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
+tab_add, tab_edit, tab_calc, tab_table = st.tabs([
+    "➕ Adicionar Pool", 
+    "✏️ Editar / Fechar Pool", 
+    "🧮 Calculadora & IL", 
+    "📄 Tabela Geral"
+])
 
-            c4, c5, c6 = st.columns(3)
-            rmin_in = c4.number_input("Range Mínimo", min_value=0.0, format="%.8f")
-            rmax_in = c5.number_input("Range Máximo", min_value=0.0, format="%.8f")
-            v_atual_in = c6.number_input("Valor Atual ($ USD)", min_value=0.0, step=10.0)
-            
-            c7, c8 = st.columns(2)
-            fees_in = c7.number_input("Fees Geradas ($ USD)", min_value=0.0, step=1.0)
-            data_ent_in = c8.text_input("Data de Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
+# TAB 1: Adicionar Pool
+with tab_add:
+    with st.form("form_add_pool"):
+        c1, c2, c3 = st.columns(3)
+        par_in = c1.text_input("Nome do Par (ex: PUMP/SOL)", "")
+        addr_in = c2.text_input("Pair Address (DexScreener)", "")
+        invest_in = c3.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
 
-            btn_save = st.form_submit_button("Salvar Pool")
+        c4, c5, c6 = st.columns(3)
+        rmin_in = c4.number_input("Range Mínimo", min_value=0.0, format="%.8f")
+        rmax_in = c5.number_input("Range Máximo", min_value=0.0, format="%.8f")
+        v_atual_in = c6.number_input("Valor Atual ($ USD)", min_value=0.0, step=10.0)
+        
+        c7, c8 = st.columns(2)
+        fees_in = c7.number_input("Fees Geradas ($ USD)", min_value=0.0, step=1.0)
+        data_ent_in = c8.text_input("Data de Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
 
-            if btn_save:
-                if not par_in or not addr_in:
-                    st.warning("Preencha o nome do par e a morada.")
+        btn_save = st.form_submit_button("Salvar Nova Pool")
+
+        if btn_save:
+            if not par_in or not addr_in:
+                st.warning("Preencha o nome do par e a morada.")
+            else:
+                p_usd, p_nat = fetch_dexscreener_data(addr_in)
+                payload = {
+                    "par": par_in,
+                    "wallet_address": addr_in,
+                    "valor_inicial": invest_in,
+                    "valor_atual": v_atual_in if v_atual_in > 0 else invest_in,
+                    "fees": fees_in,
+                    "data_entrada": data_ent_in,
+                    "range_min": rmin_in,
+                    "range_max": rmax_in,
+                    "preco_nativo": p_nat or 0,
+                    "preco_atual": p_usd or 0,
+                    "estado": "Ativa",
+                    "horas_inativa": 0.0
+                }
+                res = requests.post(f"{SUPABASE_URL}/rest/v1/pools", headers=headers, json=payload)
+                if res.status_code in [200, 201]:
+                    st.success("Pool adicionada com sucesso!")
+                    st.rerun()
                 else:
-                    p_usd, p_nat = fetch_dexscreener_data(addr_in)
-                    payload = {
-                        "par": par_in,
-                        "wallet_address": addr_in,
-                        "valor_inicial": invest_in,
-                        "valor_atual": v_atual_in if v_atual_in > 0 else invest_in,
-                        "fees": fees_in,
-                        "data_entrada": data_ent_in,
-                        "range_min": rmin_in,
-                        "range_max": rmax_in,
-                        "preco_nativo": p_nat or 0,
-                        "preco_atual": p_usd or 0,
-                        "estado": "Ativa",
-                        "horas_inativa": 0.0
-                    }
-                    res = requests.post(f"{SUPABASE_URL}/rest/v1/pools", headers=headers, json=payload)
-                    if res.status_code in [200, 201]:
-                        st.success("Pool adicionada com sucesso!")
-                        st.rerun()
-                    else:
-                        st.error(f"Erro ao guardar: {res.text}")
+                    st.error(f"Erro ao guardar: {res.text}")
 
-    with tab_table:
-        if pools:
-            df_display = pd.DataFrame(pools)
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
+# TAB 2: Editar e Eliminar Posição (Sugestão 3)
+with tab_edit:
+    if not pools:
+        st.info("Não existem pools para editar.")
+    else:
+        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')}": p for p in pools}
+        escolha = st.selectbox("Selecione a Pool a Modificar:", list(lista_opcoes.keys()))
+        pool_sel = lista_opcoes[escolha]
+        
+        st.markdown(f"**Modificar Dados da Pool ID {pool_sel['id']} ({pool_sel.get('par')})**")
+        
+        with st.form("form_edit_pool"):
+            e1, e2, e3 = st.columns(3)
+            e_val_atual = e1.number_input("Valor Atual ($ USD)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
+            e_fees = e2.number_input("Fees Totais Acumuladas ($ USD)", value=to_float(pool_sel.get("fees")), step=1.0)
+            e_data_ent = e3.text_input("Data de Entrada (YYYY-MM-DD)", value=str(pool_sel.get("data_entrada", "")))
+
+            e4, e5, e6 = st.columns(3)
+            e_rmin = e4.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
+            e_rmax = e5.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
+            e_hrs_inativa = e6.number_input("Horas Inativa Manual", value=to_float(pool_sel.get("horas_inativa")), step=1.0)
+
+            btn_update = st.form_submit_button("💾 Guardar Alterações")
+
+            if btn_update:
+                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+                update_payload = {
+                    "valor_atual": e_val_atual,
+                    "fees": e_fees,
+                    "data_entrada": e_data_ent,
+                    "range_min": e_rmin,
+                    "range_max": e_rmax,
+                    "horas_inativa": e_hrs_inativa
+                }
+                res = requests.patch(patch_url, headers=headers, json=update_payload)
+                if res.status_code in [200, 204]:
+                    st.success("Dados atualizados com sucesso no Supabase!")
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao atualizar: {res.text}")
+
+        st.markdown("---")
+        with st.expander("🚨 Zona de Perigo - Encerrar/Eliminar Pool"):
+            st.warning("Ao confirmar, esta pool será removida permanentemente do Supabase.")
+            if st.button(f"🗑️ Eliminar Pool {pool_sel.get('par')} (ID {pool_sel['id']})", type="primary"):
+                del_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+                del_res = requests.delete(del_url, headers=headers)
+                if del_res.status_code in [200, 204]:
+                    st.success("Pool eliminada com sucesso!")
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao eliminar: {del_res.text}")
+
+# TAB 3: Calculadora de Rebalanceamento & IL (Sugestão 2)
+with tab_calc:
+    col_c1, col_c2 = st.columns(2)
+
+    with col_c1:
+        st.markdown("#### 🎯 Calculadora de Novos Ranges")
+        st.caption("Obtém os novos valores limite com base no preço atual do par para rebalancear a tua posição.")
+        
+        p_ref = st.number_input("Preço Nativo Atual do Par", min_value=0.0, value=0.000053, format="%.8f")
+        var_pct = st.slider("Amplitude do Range desejada (± %)", min_value=1.0, max_value=50.0, value=15.0, step=0.5)
+
+        if p_ref > 0:
+            novo_min = p_ref * (1 - (var_pct / 100))
+            novo_max = p_ref * (1 + (var_pct / 100))
+            
+            st.markdown(f"""
+            * **Novo Range Mínimo (-{var_pct}%):** `{format_crypto_price(novo_min)}`
+            * **Novo Range Máximo (+{var_pct}%):** `{format_crypto_price(novo_max)}`
+            """)
+
+    with col_c2:
+        st.markdown("#### 📉 Simulador de Impermanent Loss (IL)")
+        st.caption("Estima o impacto da variação de preço na tua posição em comparação com simplesmente guardar os tokens (HODL).")
+        
+        var_preco_simulada = st.slider("Variação do Preço face à entrada (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0)
+        
+        razao = 1 + (var_preco_simulada / 100.0)
+        il_resultado = calcular_il(razao)
+        
+        st.metric("Impermanent Loss Estimada", f"{il_resultado:.2f}%", delta=f"{il_resultado:.2f}%", delta_color="inverse")
+        st.info("Nota: A perda impermanente real numa pool concentrada (Uni v3 / Meteora) varia consoante a largura do range definido.")
+
+# TAB 4: Tabela Resumo
+with tab_table:
+    if pools:
+        df_display = pd.DataFrame(pools)
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
