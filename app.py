@@ -52,14 +52,22 @@ st.markdown("""
 # -----------------------------------------------------------------------------
 # 2. LIGAÇÃO AO SUPABASE & CREDENCIAIS TELEGRAM
 # -----------------------------------------------------------------------------
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", "")).strip().rstrip("/")
+def get_secret(key_name, default=""):
+    """ Procura chaves em st.secrets ou variáveis de ambiente de forma segura """
+    try:
+        if key_name in st.secrets:
+            return str(st.secrets[key_name]).strip()
+    except Exception:
+        pass
+    return str(os.environ.get(key_name, default)).strip()
+
+SUPABASE_URL = get_secret("SUPABASE_URL").rstrip("/")
 if SUPABASE_URL and not SUPABASE_URL.startswith("http"):
     SUPABASE_URL = f"https://{SUPABASE_URL}"
 
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", "")).strip()
-
-TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
-TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
+TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 
 MARGEM_AVISO_PCT = 3.0  # Alerta preventivo se o preço estiver a menos de 3% do limite
 
@@ -75,19 +83,29 @@ headers = {
 # -----------------------------------------------------------------------------
 def send_telegram(message):
     """ Envia notificação formatada para o Telegram """
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+    bot_token = get_secret("TELEGRAM_BOT_TOKEN")
+    chat_id = get_secret("TELEGRAM_CHAT_ID")
+
+    if not bot_token or not chat_id:
+        st.warning("⚠️ Token ou Chat ID do Telegram não foram encontrados nos Secrets.")
         return False
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": chat_id,
         "text": message,
         "parse_mode": "HTML",
         "disable_web_page_preview": True
     }
     try:
         res = requests.post(url, json=payload, timeout=8)
-        return res.status_code == 200
-    except Exception:
+        if res.status_code == 200:
+            return True
+        else:
+            st.error(f"Erro Telegram ({res.status_code}): {res.text}")
+            return False
+    except Exception as e:
+        st.error(f"Exceção ao enviar Telegram: {e}")
         return False
 
 def fetch_dexscreener_data(pair_address):
@@ -311,8 +329,6 @@ if st.sidebar.button("📲 Enviar Resumo p/ Telegram", use_container_width=True)
     )
     if send_telegram(msg_resumo):
         st.sidebar.success("Resumo enviado com sucesso!")
-    else:
-        st.sidebar.error("Erro ao enviar. Verifica o Bot Token/Chat ID.")
 
 # -----------------------------------------------------------------------------
 # 6. EXIBIÇÃO DE KPIS
