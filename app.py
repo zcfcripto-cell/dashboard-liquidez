@@ -384,7 +384,7 @@ valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
-# BOTÃO DE SNAPSHOT MANUAL
+# BOTÃO DE SNAPSHOT MANUAL NA BARRA LATERAL
 if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
     hoje = datetime.now().strftime('%Y-%m-%d')
     payload_pnl = {
@@ -777,12 +777,20 @@ with tab_llama:
 
         # Mapeamento e criação dos links
         df_filtered["pool_address"] = df_filtered["pool"].astype(str)
+        
+        # 1. Link DefiLlama Garantido
         df_filtered["link_llama"] = df_filtered.apply(
             lambda r: f"https://defillama.com/yields/pool/{r['pool']}", axis=1
         )
-        # Pesquisa do DexScreener configurada pelo símbolo do par
+        
+        # 2. Link DexScreener (Busca Otimizada: Chain + Protocolo + Símbolo)
         df_filtered["link_dexscreener"] = df_filtered.apply(
-            lambda r: f"https://dexscreener.com/search?q={r.get('symbol', '')}", axis=1
+            lambda r: f"https://dexscreener.com/search?q={r.get('chain', '')}%20{r.get('project', '')}%20{r.get('symbol', '')}".replace(" ", "%20"), axis=1
+        )
+
+        # 3. Link GeckoTerminal
+        df_filtered["link_gecko"] = df_filtered.apply(
+            lambda r: f"https://www.geckoterminal.com/search?q={r.get('symbol', '')}%20{r.get('project', '')}".replace(" ", "%20"), axis=1
         )
 
         cols_map = {
@@ -795,7 +803,8 @@ with tab_llama:
             "apyBase": "APY Base Fees (%)",
             "apyReward": "APY Rewards (%)",
             "link_llama": "DefiLlama",
-            "link_dexscreener": "DexScreener"
+            "link_dexscreener": "DexScreener",
+            "link_gecko": "GeckoTerminal"
         }
         
         df_show = df_filtered[list(cols_map.keys())].rename(columns=cols_map)
@@ -805,13 +814,14 @@ with tab_llama:
         df_show["APY Base Fees (%)"] = df_show["APY Base Fees (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
         df_show["APY Rewards (%)"] = df_show["APY Rewards (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
 
-        # Exibição das colunas de links clicáveis
+        # Exibição com colunas de links clicáveis
         st.dataframe(
             df_show, 
             use_container_width=True, 
             hide_index=True,
             column_config={
                 "DefiLlama": st.column_config.LinkColumn("DefiLlama", display_text="🦙 Ver Pool"),
-                "DexScreener": st.column_config.LinkColumn("DexScreener", display_text="🔍 Ver Gráfico")
+                "DexScreener": st.column_config.LinkColumn("DexScreener", display_text="🔍 DexScreener"),
+                "GeckoTerminal": st.column_config.LinkColumn("GeckoTerminal", display_text="🦎 GeckoTerminal")
             }
         )
