@@ -249,7 +249,6 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     with st.spinner("A atualizar posições abertas..."):
         agora = time.time()
         for p in pools:
-            # TRAVA DE SEGURANÇA: Ignorar estritamente pools fechadas na sincronização
             if str(p.get("estado", "")).strip().lower() in ["fechada", "closed"]:
                 continue
                 
@@ -651,9 +650,34 @@ with tab_edit:
                     st.success("Pool eliminada!")
                     st.rerun()
 
+# TAB 3: Calculadora de Rebalanceamento & IL (CORRIGIDA)
 with tab_calc:
     col_c1, col_c2 = st.columns(2)
 
     with col_c1:
         st.markdown("#### 🎯 Calculadora de Novos Ranges")
-        p_ref = st.number_input("Preço Nativo Atual", min_value=0.0, value=0.000053, format="%.8f")
+        p_ref = st.number_input("Preço Nativo Atual", min_value=0.0, value=0.000053, format="%.8f", key="calc_p_ref")
+        var_pct = st.slider("Amplitude (± %)", min_value=1.0, max_value=50.0, value=15.0, step=0.5, key="calc_var_pct")
+
+        if p_ref > 0:
+            novo_min = p_ref * (1 - (var_pct / 100))
+            novo_max = p_ref * (1 + (var_pct / 100))
+            st.write(f"**Novo Range Mínimo (-{var_pct}%):** `{format_crypto_price(novo_min)}`")
+            st.write(f"**Novo Range Máximo (+{var_pct}%):** `{format_crypto_price(novo_max)}`")
+
+    with col_c2:
+        st.markdown("#### 📉 Simulador de IL")
+        var_preco_simulada = st.slider("Variação de Preço (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0, key="calc_il_slider")
+        razao = 1.0 + (var_preco_simulada / 100.0)
+        il_resultado = calcular_il(razao)
+        st.metric("IL Estimada", f"{il_resultado:.2f}%", delta=f"{il_resultado:.2f}%", delta_color="inverse")
+
+# TAB 4: Tabela Resumo (CORRIGIDA COM HIGIENIZAÇÃO DE DADOS)
+with tab_table:
+    if pools:
+        df_table = pd.DataFrame(pools)
+        # Preencher valores nulos para evitar falhas de visualização no Pandas/Streamlit
+        df_table = df_table.fillna("")
+        st.dataframe(df_table, use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhuma posição registada na base de dados.")
