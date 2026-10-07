@@ -708,6 +708,7 @@ with tab_table:
         cols_display = {
             "id": "ID",
             "par": "Par",
+            "wallet_address": "Morada da Pool (Pair Address)",
             "estado": "Estado",
             "v_inicial_calc": "Investido ($)",
             "v_atual_calc": "Valor Final ($)",
@@ -774,14 +775,22 @@ with tab_llama:
 
         df_filtered = df_filtered.sort_values(by=sort_col, ascending=False).head(50)
 
+        # Mapeamento da coluna pool (ID / Address do DefiLlama)
+        df_filtered["pool_address"] = df_filtered["pool"].astype(str)
+        df_filtered["link"] = df_filtered.apply(
+            lambda r: f"https://defillama.com/yields/pool/{r['pool']}", axis=1
+        )
+
         cols_map = {
             "symbol": "Par / Símbolo",
             "project": "Protocolo",
             "chain": "Rede",
+            "pool_address": "Morada da Pool / ID",
             "tvlUsd": "TVL ($)",
             "apy": "APY Total (%)",
             "apyBase": "APY Base Fees (%)",
-            "apyReward": "APY Rewards (%)"
+            "apyReward": "APY Rewards (%)",
+            "link": "Link DefiLlama"
         }
         
         df_show = df_filtered[list(cols_map.keys())].rename(columns=cols_map)
@@ -791,4 +800,12 @@ with tab_llama:
         df_show["APY Base Fees (%)"] = df_show["APY Base Fees (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
         df_show["APY Rewards (%)"] = df_show["APY Rewards (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
 
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        # Exibição com suporte a links clicáveis
+        st.dataframe(
+            df_show, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Link DefiLlama": st.column_config.LinkColumn("Link DefiLlama", display_text="🔗 Ver Pool")
+            }
+        )
