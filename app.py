@@ -32,6 +32,7 @@ st.markdown("""
     }
     .pool-card-active { border-left: 5px solid #10b981; }
     .pool-card-inactive { border-left: 5px solid #ef4444; }
+    .pool-card-closed { border-left: 5px solid #6b7280; opacity: 0.8; }
     
     /* Badges de Estado */
     .badge-active {
@@ -45,6 +46,14 @@ st.markdown("""
     .badge-inactive {
         background-color: rgba(239, 68, 68, 0.2);
         color: #ef4444;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.8rem;
+    }
+    .badge-closed {
+        background-color: rgba(107, 114, 128, 0.2);
+        color: #9ca3af;
         padding: 4px 10px;
         border-radius: 12px;
         font-weight: 600;
@@ -133,28 +142,23 @@ def fetch_dexscreener_data(pair_address):
     return None, None
 
 def render_sparkline_chart(preco_atual, range_min, range_max):
-    """ Cria um mini-gráfico de linha verde limpo para dentro do cartão da pool """
     if preco_atual <= 0:
         return
     
-    # Gera uma curva suave de tendência simulada em torno do preço atual para demonstração visual
     steps = 15
     import numpy as np
     x_vals = list(range(steps))
-    # Simula oscilação recente do preço terminando no preço atual
     variacao = np.linspace(-0.04, 0, steps) + np.random.normal(0, 0.01, steps)
     y_vals = [preco_atual * (1 + v) for v in variacao]
     y_vals[-1] = preco_atual
 
     fig = go.Figure()
 
-    # Linhas de referência de Range (Mínimo e Máximo) se configurados
     if range_min > 0:
         fig.add_hline(y=range_min, line_dash="dash", line_color="#ef4444", line_width=1)
     if range_max > 0:
         fig.add_hline(y=range_max, line_dash="dash", line_color="#ef4444", line_width=1)
 
-    # Linha de tendência verde com preenchimento sombreado
     fig.add_trace(go.Scatter(
         x=x_vals,
         y=y_vals,
@@ -240,13 +244,17 @@ def calcular_il(razao_preco):
 pools = get_pools()
 
 st.sidebar.title("⚡ DeFi Hub Pro")
-filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Todas", "Ativas 🟢", "Fora de Range 🔴"])
+filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Apenas Abertas (Ativas/Fora)", "Ativas 🟢", "Fora de Range 🔴", "Fechadas 📁", "Todas"])
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
-    with st.spinner("A atualizar..."):
+    with st.spinner("A atualizar posições abertas..."):
         agora = time.time()
         for p in pools:
+            # Ignorar pools fechadas na sincronização automática
+            if p.get("estado") == "Fechada":
+                continue
+                
             addr = p.get("wallet_address")
             par = p.get("par", "Par N/A")
             if addr:
@@ -310,6 +318,7 @@ total_fees_diarias_corridas = 0.0
 total_fees_diarias_ativas = 0.0
 total_ativas = 0
 total_inativas = 0
+total_fechadas = 0
 
 pools_processadas = []
 
@@ -319,7 +328,8 @@ for p in pools:
     v_fees = to_float(p.get("fees"))
     data_ent = p.get("data_entrada", "")
     hrs_inativa = to_float(p.get("horas_inativa"))
-    
+    estado = p.get("estado", "Ativa")
+
     v_atual_final = v_at if v_at > 0 else v_inv
     pnl_pool = (v_atual_final + v_fees) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
@@ -332,17 +342,20 @@ for p in pools:
     fees_dia_ativo = v_fees / dias_ativos
     apr_ativo = ((v_fees / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
 
-    total_investido += v_inv
-    total_valor_atual += v_atual_final
-    total_fees += v_fees
-    total_fees_diarias_corridas += fees_dia_corrido
-    total_fees_diarias_ativas += fees_dia_ativo
+    # Apenas pools abertas contam para os totais do portfólio ativo
+    if estado != "Fechada":
+        total_investido += v_inv
+        total_valor_atual += v_atual_final
+        total_fees += v_fees
+        total_fees_diarias_corridas += fees_dia_corrido
+        total_fees_diarias_ativas += fees_dia_ativo
 
-    estado = p.get("estado", "Ativa")
     if estado == "Ativa":
         total_ativas += 1
-    else:
+    elif estado == "Inativa":
         total_inativas += 1
+    elif estado == "Fechada":
+        total_fechadas += 1
 
     p_item = p.copy()
     p_item["v_inicial_calc"] = v_inv
@@ -369,7 +382,7 @@ if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
         f"💵 <b>Atual:</b> ${total_valor_atual:,.2f}\n"
         f"💸 <b>Fees:</b> ${total_fees:,.2f}\n"
         f"📈 <b>PnL:</b> ${pnl_global:,.2f} ({roi_global:.2f}%)\n"
-        f"📌 <b>Ativas:</b> 🟢 {total_ativas} | 🔴 {total_inativas}"
+        f"📌 <b>Ativas:</b> 🟢 {total_ativas} | 🔴 {total_inativas} | 📁 {total_fechadas}"
     )
     if send_telegram(msg_resumo):
         st.sidebar.success("Enviado!")
@@ -380,27 +393,31 @@ if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
 st.title("⚡ Liquidity Hub Pro")
 
 k1, k2, k3 = st.columns(3)
-k1.metric("Investimento Total", f"${total_investido:,.2f}")
+k1.metric("Investimento Ativo", f"${total_investido:,.2f}")
 k2.metric("Valor em Pools", f"${total_valor_atual:,.2f}")
 k3.metric("Fees Totais 💸", f"${total_fees:,.2f}")
 
 k4, k5, k6 = st.columns(3)
 k4.metric("Fees / Dia (Corrido)", f"${total_fees_diarias_corridas:,.2f}/d")
 k5.metric("PnL Total (+Fees)", f"${pnl_global:,.2f}", delta=f"{roi_global:.2f}%")
-k6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
+k6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas} | 📁 {total_fechadas}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (Com Mini-Gráfico no Cartão)
+# 7. POSIÇÕES EM MONITORIZAÇÃO
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
 pools_filtradas = pools_processadas
-if filtro_estado == "Ativas 🟢":
+if filtro_estado == "Apenas Abertas (Ativas/Fora)":
+    pools_filtradas = [p for p in pools_processadas if p.get("estado") != "Fechada"]
+elif filtro_estado == "Ativas 🟢":
     pools_filtradas = [p for p in pools_processadas if p.get("estado") == "Ativa"]
 elif filtro_estado == "Fora de Range 🔴":
-    pools_filtradas = [p for p in pools_processadas if p.get("estado") != "Ativa"]
+    pools_filtradas = [p for p in pools_processadas if p.get("estado") == "Inativa"]
+elif filtro_estado == "Fechadas 📁":
+    pools_filtradas = [p for p in pools_processadas if p.get("estado") == "Fechada"]
 
 if not pools_filtradas:
     st.info("Nenhuma piscina encontrada com o filtro selecionado.")
@@ -437,9 +454,15 @@ else:
             pct = ((r_min - p_nat) / r_min) * 100
             tipo_desvio = f"-{pct:.2f}% mín"
 
-        is_active = (estado == "Ativa")
-        badge_html = '<span class="badge-active">🟢 EM RANGE</span>' if is_active else f'<span class="badge-inactive">🔴 FORA ({tipo_desvio} | {hrs_inativa:.1f}h)</span>'
-        card_class = "pool-card pool-card-active" if is_active else "pool-card pool-card-inactive"
+        if estado == "Ativa":
+            badge_html = '<span class="badge-active">🟢 EM RANGE</span>'
+            card_class = "pool-card pool-card-active"
+        elif estado == "Inativa":
+            badge_html = f'<span class="badge-inactive">🔴 FORA ({tipo_desvio} | {hrs_inativa:.1f}h)</span>'
+            card_class = "pool-card pool-card-inactive"
+        else:
+            badge_html = '<span class="badge-closed">📁 FECHADA</span>'
+            card_class = "pool-card pool-card-closed"
 
         with st.container():
             st.markdown(f"""
@@ -457,8 +480,8 @@ else:
             c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
             c_p4.metric("Fees Totais", f"${v_fees:,.2f}")
 
-            # RENDERIZAR O MINI GRÁFICO DE LINHA VERDE DENTRO DO CARTÃO
-            render_sparkline_chart(p_nat, r_min, r_max)
+            if estado != "Fechada":
+                render_sparkline_chart(p_nat, r_min, r_max)
 
             c_p5, c_p6, c_p7, c_p8 = st.columns(4)
             c_p5.metric("Dia Corrido", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
@@ -476,13 +499,14 @@ st.subheader("📊 Análise do Portfólio")
 col_g1, col_g2 = st.columns(2)
 
 with col_g1:
-    if pools_processadas:
-        df_pie = pd.DataFrame(pools_processadas)
+    pools_abertas = [p for p in pools_processadas if p.get("estado") != "Fechada"]
+    if pools_abertas:
+        df_pie = pd.DataFrame(pools_abertas)
         fig_pie = px.pie(
             df_pie, 
             names="par", 
             values="v_atual_calc", 
-            title="Distribuição do Capital por Pool",
+            title="Distribuição do Capital Ativo por Pool",
             hole=0.4
         )
         fig_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white", margin=dict(l=10, r=10, t=40, b=10))
@@ -564,11 +588,12 @@ with tab_edit:
     if not pools:
         st.info("Não existem pools para editar.")
     else:
-        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')}": p for p in pools}
+        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')} [{p.get('estado', 'Ativa')}]": p for p in pools}
         escolha = st.selectbox("Selecione a Pool:", list(lista_opcoes.keys()))
         pool_sel = lista_opcoes[escolha]
         
         with st.form("form_edit_pool"):
+            st.markdown(f"**Editar Posição ID {pool_sel['id']} ({pool_sel.get('par')})**")
             e1, e2, e3 = st.columns(3)
             e_val_atual = e1.number_input("Valor Atual ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
             e_fees = e2.number_input("Fees Acumuladas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
@@ -597,12 +622,26 @@ with tab_edit:
                     st.rerun()
 
         st.markdown("---")
-        with st.expander("🚨 Eliminar Pool"):
-            if st.button(f"🗑️ Confirmar Eliminação de {pool_sel.get('par')}", type="primary"):
+        
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            st.markdown("#### 🔒 Encerrar Posição (Manter no Histórico)")
+            st.caption("Muda o estado para 'Fechada'. A pool deixará de ser sincronizada e sairá das métricas ativas, mas ficará registada no histórico.")
+            if st.button(f"🔒 Marcar {pool_sel.get('par')} como Fechada", use_container_width=True):
+                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+                res = requests.patch(patch_url, headers=headers, json={"estado": "Fechada"})
+                if res.status_code in [200, 204]:
+                    st.success(f"Pool {pool_sel.get('par')} encerrada e arquivada com sucesso!")
+                    st.rerun()
+
+        with col_f2:
+            st.markdown("#### 🚨 Eliminar Definitivamente")
+            st.caption("Remove permanentemente esta posição da base de dados Supabase.")
+            if st.button(f"🗑️ Eliminar Permanente ID {pool_sel['id']}", type="primary", use_container_width=True):
                 del_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
                 del_res = requests.delete(del_url, headers=headers)
                 if del_res.status_code in [200, 204]:
-                    st.success("Eliminada!")
+                    st.success("Pool eliminada!")
                     st.rerun()
 
 with tab_calc:
