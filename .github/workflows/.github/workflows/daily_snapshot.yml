@@ -1,0 +1,27 @@
+name: Daily PnL Snapshot
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Corre todos os dias à meia-noite (UTC)
+  workflow_dispatch:      # Permite correr manualmente quando quiseres testar
+
+jobs:
+  run-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependências
+        run: pip install requests
+
+      - name: Executar Snapshot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python cron_snapshot.py
