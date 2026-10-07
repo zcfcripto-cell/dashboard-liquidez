@@ -247,6 +247,14 @@ def calcular_il(razao_preco):
     il = (2 * math.sqrt(razao_preco) / (1 + razao_preco)) - 1
     return il * 100
 
+def normalizar_estado(estado_raw):
+    e = str(estado_raw or "").strip().lower()
+    if "fechad" in e or "closed" in e:
+        return "Fechada"
+    elif "inativ" in e or "fora" in e:
+        return "Inativa"
+    return "Ativa"
+
 # -----------------------------------------------------------------------------
 # 4. BARRA LATERAL & OPÇÕES
 # -----------------------------------------------------------------------------
@@ -262,8 +270,10 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     with st.spinner("A atualizar posições abertas..."):
         agora = time.time()
         for p in pools:
-            estado_str = str(p.get("estado", "")).strip().lower()
-            if estado_str in ["fechada", "closed"]:
+            estado_norm = normalizar_estado(p.get("estado"))
+            
+            # PROTEÇÃO ABSOLUTA: Se a pool estiver Fechada, ignora completamente a sincronização
+            if estado_norm == "Fechada":
                 continue
                 
             addr = p.get("wallet_address")
@@ -286,7 +296,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
                         desvio_txt = f"-{pct:.2f}% mín"
                     
                     novo_estado = "Ativa" if in_range else "Inativa"
-                    estado_anterior = p.get("estado", "Ativa")
+                    estado_anterior = estado_norm
                     last_update = to_float(p.get("last_price_update"))
                     horas_inativas_atuais = to_float(p.get("horas_inativa"))
                     
@@ -339,15 +349,8 @@ for p in pools:
     v_fees = to_float(p.get("fees"))
     data_ent = p.get("data_entrada", "")
     hrs_inativa = to_float(p.get("horas_inativa"))
-    estado_raw = str(p.get("estado", "Ativa")).strip()
     
-    # Normalização estrita do estado
-    if estado_raw.lower() in ["fechada", "closed"]:
-        estado = "Fechada"
-    elif estado_raw.lower() in ["inativa", "fora"]:
-        estado = "Inativa"
-    else:
-        estado = "Ativa"
+    estado = normalizar_estado(p.get("estado"))
 
     if estado == "Fechada":
         v_atual_final = v_at
@@ -636,7 +639,8 @@ with tab_edit:
             st.markdown(f"**Editar Posição ID {pool_sel['id']} ({pool_sel.get('par')})**")
             
             estado_opcoes = ["Ativa", "Inativa", "Fechada"]
-            estado_atual_idx = estado_opcoes.index(pool_sel.get("estado", "Ativa")) if pool_sel.get("estado") in estado_opcoes else 0
+            estado_atual = normalizar_estado(pool_sel.get("estado"))
+            estado_atual_idx = estado_opcoes.index(estado_atual) if estado_atual in estado_opcoes else 0
             e_estado = st.selectbox("Estado da Pool:", estado_opcoes, index=estado_atual_idx)
 
             e1, e2, e3 = st.columns(3)
