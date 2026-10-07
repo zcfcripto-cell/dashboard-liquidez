@@ -775,20 +775,21 @@ with tab_llama:
 
         df_filtered = df_filtered.sort_values(by=sort_col, ascending=False).head(50)
 
-        # Mapeamento da coluna pool (ID / Address) para links
+        # Mapeamento e criação dos links
         df_filtered["pool_address"] = df_filtered["pool"].astype(str)
         df_filtered["link_llama"] = df_filtered.apply(
             lambda r: f"https://defillama.com/yields/pool/{r['pool']}", axis=1
         )
+        # Pesquisa do DexScreener configurada pelo símbolo do par
         df_filtered["link_dexscreener"] = df_filtered.apply(
-            lambda r: f"https://dexscreener.com/search?q={r['pool']}", axis=1
+            lambda r: f"https://dexscreener.com/search?q={r.get('symbol', '')}", axis=1
         )
 
         cols_map = {
             "symbol": "Par / Símbolo",
             "project": "Protocolo",
             "chain": "Rede",
-            "pool_address": "Morada da Pool / ID",
+            "pool_address": "ID DefiLlama",
             "tvlUsd": "TVL ($)",
             "apy": "APY Total (%)",
             "apyBase": "APY Base Fees (%)",
@@ -804,7 +805,7 @@ with tab_llama:
         df_show["APY Base Fees (%)"] = df_show["APY Base Fees (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
         df_show["APY Rewards (%)"] = df_show["APY Rewards (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
 
-        # Exibição com suporte a colunas de links clicáveis
+        # Exibição das colunas de links clicáveis
         st.dataframe(
             df_show, 
             use_container_width=True, 
