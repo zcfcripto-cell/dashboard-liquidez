@@ -103,7 +103,7 @@ headers = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. FUNÇÕES AUXILIARES & SPARKLINE
+# 3. FUNÇÕES AUXILIARES & DEFILLAMA
 # -----------------------------------------------------------------------------
 def send_telegram(message):
     bot_token = get_secret(["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"])
@@ -137,6 +137,17 @@ def fetch_dexscreener_data(pair_address):
     except Exception:
         pass
     return None, None
+
+@st.cache_data(ttl=3600)
+def fetch_defillama_yields():
+    url = "https://yields.llama.fi/pools"
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            return res.json().get("data", [])
+    except Exception:
+        pass
+    return []
 
 def render_sparkline_chart(preco_atual, range_min, range_max):
     if preco_atual <= 0:
@@ -244,7 +255,6 @@ pools = get_pools()
 st.sidebar.title("⚡ DeFi Hub Pro")
 filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Apenas Abertas (Ativas/Fora)", "Ativas 🟢", "Fora de Range 🔴", "Fechadas 📁", "Todas"])
 
-# TOGGLE PARA ESCONDER DETALHES DAS POOLS
 esconder_detalhes = st.sidebar.checkbox("👁️ Ocultar Detalhes das Pools", value=False)
 
 st.sidebar.markdown("---")
@@ -374,7 +384,7 @@ valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
-# BOTÃO DE SNAPSHOT MANUAL NA BARRA LATERAL
+# BOTÃO DE SNAPSHOT MANUAL
 if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
     hoje = datetime.now().strftime('%Y-%m-%d')
     payload_pnl = {
@@ -550,11 +560,12 @@ with col_g2:
 st.markdown("---")
 st.subheader("🛠️ Ferramentas & Gestão")
 
-tab_add, tab_edit, tab_calc, tab_table = st.tabs([
+tab_add, tab_edit, tab_calc, tab_table, tab_llama = st.tabs([
     "➕ Adicionar", 
     "✏ Editar / Fechar", 
     "🧮 Calculadora & IL", 
-    "📄 Tabela Geral"
+    "📄 Tabela Geral",
+    "🔥 DefiLlama Yields"
 ])
 
 with tab_add:
@@ -669,7 +680,6 @@ with tab_edit:
                     st.success("Pool eliminada!")
                     st.rerun()
 
-# TAB 3: Calculadora de Rebalanceamento & IL
 with tab_calc:
     col_c1, col_c2 = st.columns(2)
 
@@ -691,7 +701,6 @@ with tab_calc:
         il_resultado = calcular_il(razao)
         st.metric("IL Estimada", f"{il_resultado:.2f}%", delta=f"{il_resultado:.2f}%", delta_color="inverse")
 
-# TAB 4: Tabela Resumo (Com Coluna de PnL / Ganhos e Perdas em USD)
 with tab_table:
     if pools_processadas:
         df_table = pd.DataFrame(pools_processadas)
@@ -727,3 +736,59 @@ with tab_table:
         st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
         st.info("Nenhuma posição registada na base de dados.")
+
+# TAB 5: Oportunidades DeFiLlama
+with tab_llama:
+    st.markdown("#### 🦙 Maiores Rendimentos DeFi em Tempo Real (DefiLlama)")
+    st.caption("Dados consultados diretamente via API pública do DefiLlama com atualização horária.")
+    
+    data_llama = fetch_defillama_yields()
+    
+    if not data_llama:
+        st.warning("Não foi possível carregar os dados do DefiLlama de momento.")
+    else:
+        df_llama = pd.DataFrame(data_llama)
+        
+        col_f1, col_f2, col_f3 = st.columns(3)
+        
+        chains_disponiveis = sorted(df_llama["chain"].dropna().unique().tolist())
+        default_chains = [c for c in ["Solana", "Ethereum", "Arbitrum"] if c in chains_disponiveis]
+        chain_sel = col_f1.multiselect("Filtrar por Rede (Chain):", chains_disponiveis, default=default_chains)
+        
+        tvl_min = col_f2.number_input("TVL Mínimo ($ USD):", min_value=10000, value=100000, step=50000)
+        
+        ordem_sel = col_f3.selectbox("Ordenar por:", ["APY Total (apy)", "APY Base / Fees (apyBase)", "TVL ($)"])
+
+        if chain_sel:
+            df_filtered = df_llama[df_llama["chain"].isin(chain_sel)]
+        else:
+            df_filtered = df_llama
+
+        df_filtered = df_filtered[df_filtered["tvlUsd"] >= tvl_min]
+
+        sort_col = "apy"
+        if ordem_sel == "APY Base / Fees (apyBase)":
+            sort_col = "apyBase"
+        elif ordem_sel == "TVL ($)":
+            sort_col = "tvlUsd"
+
+        df_filtered = df_filtered.sort_values(by=sort_col, ascending=False).head(50)
+
+        cols_map = {
+            "symbol": "Par / Símbolo",
+            "project": "Protocolo",
+            "chain": "Rede",
+            "tvlUsd": "TVL ($)",
+            "apy": "APY Total (%)",
+            "apyBase": "APY Base Fees (%)",
+            "apyReward": "APY Rewards (%)"
+        }
+        
+        df_show = df_filtered[list(cols_map.keys())].rename(columns=cols_map)
+        
+        df_show["TVL ($)"] = df_show["TVL ($)"].apply(lambda x: f"${x:,.0f}")
+        df_show["APY Total (%)"] = df_show["APY Total (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
+        df_show["APY Base Fees (%)"] = df_show["APY Base Fees (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
+        df_show["APY Rewards (%)"] = df_show["APY Rewards (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
+
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
