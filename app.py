@@ -32,7 +32,7 @@ st.markdown("""
     }
     .pool-card-active { border-left: 5px solid #10b981; }
     .pool-card-inactive { border-left: 5px solid #ef4444; }
-    .pool-card-closed { border-left: 5px solid #6b7280; opacity: 0.75; }
+    .pool-card-closed { border-left: 5px solid #6b7280; opacity: 0.65; }
     
     .badge-active {
         background-color: rgba(16, 185, 129, 0.2);
@@ -262,7 +262,8 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     with st.spinner("A atualizar posições abertas..."):
         agora = time.time()
         for p in pools:
-            if str(p.get("estado", "")).strip().lower() in ["fechada", "closed"]:
+            estado_str = str(p.get("estado", "")).strip().lower()
+            if estado_str in ["fechada", "closed"]:
                 continue
                 
             addr = p.get("wallet_address")
@@ -338,9 +339,21 @@ for p in pools:
     v_fees = to_float(p.get("fees"))
     data_ent = p.get("data_entrada", "")
     hrs_inativa = to_float(p.get("horas_inativa"))
-    estado = p.get("estado", "Ativa")
+    estado_raw = str(p.get("estado", "Ativa")).strip()
+    
+    # Normalização estrita do estado
+    if estado_raw.lower() in ["fechada", "closed"]:
+        estado = "Fechada"
+    elif estado_raw.lower() in ["inativa", "fora"]:
+        estado = "Inativa"
+    else:
+        estado = "Ativa"
 
-    v_atual_final = v_at if v_at > 0 else v_inv
+    if estado == "Fechada":
+        v_atual_final = v_at
+    else:
+        v_atual_final = v_at if v_at > 0 else v_inv
+
     pnl_pool = (v_atual_final + v_fees) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
 
@@ -367,6 +380,7 @@ for p in pools:
         total_fechadas += 1
 
     p_item = p.copy()
+    p_item["estado"] = estado
     p_item["v_inicial_calc"] = v_inv
     p_item["v_atual_calc"] = v_atual_final
     p_item["fees_calc"] = v_fees
@@ -384,7 +398,7 @@ valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
-# BOTÃO DE SNAPSHOT MANUAL NA BARRA LATERAL
+# BOTÃO DE SNAPSHOT MANUAL
 if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
     hoje = datetime.now().strftime('%Y-%m-%d')
     payload_pnl = {
@@ -775,20 +789,16 @@ with tab_llama:
 
         df_filtered = df_filtered.sort_values(by=sort_col, ascending=False).head(50)
 
-        # Mapeamento e criação dos links
         df_filtered["pool_address"] = df_filtered["pool"].astype(str)
         
-        # 1. Link DefiLlama Garantido
         df_filtered["link_llama"] = df_filtered.apply(
             lambda r: f"https://defillama.com/yields/pool/{r['pool']}", axis=1
         )
         
-        # 2. Link DexScreener (Busca Otimizada: Chain + Protocolo + Símbolo)
         df_filtered["link_dexscreener"] = df_filtered.apply(
             lambda r: f"https://dexscreener.com/search?q={r.get('chain', '')}%20{r.get('project', '')}%20{r.get('symbol', '')}".replace(" ", "%20"), axis=1
         )
 
-        # 3. Link GeckoTerminal
         df_filtered["link_gecko"] = df_filtered.apply(
             lambda r: f"https://www.geckoterminal.com/search?q={r.get('symbol', '')}%20{r.get('project', '')}".replace(" ", "%20"), axis=1
         )
@@ -814,7 +824,6 @@ with tab_llama:
         df_show["APY Base Fees (%)"] = df_show["APY Base Fees (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
         df_show["APY Rewards (%)"] = df_show["APY Rewards (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
 
-        # Exibição com colunas de links clicáveis
         st.dataframe(
             df_show, 
             use_container_width=True, 
