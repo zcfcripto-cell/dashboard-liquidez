@@ -244,6 +244,9 @@ pools = get_pools()
 st.sidebar.title("⚡ DeFi Hub Pro")
 filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Apenas Abertas (Ativas/Fora)", "Ativas 🟢", "Fora de Range 🔴", "Fechadas 📁", "Todas"])
 
+# BOTÃO / TOGGLE PARA ESCONDER DETALHES
+esconder_detalhes = st.sidebar.checkbox("👁️ Ocultar Detalhes das Pools", value=False)
+
 st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     with st.spinner("A atualizar posições abertas..."):
@@ -463,28 +466,30 @@ else:
         with st.container():
             st.markdown(f"""
             <div class="{card_class}">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
                     <h3 style="margin:0;">{par} <span style="font-size: 0.8rem; color: #a0aec0;">({dias_corridos:.0f}d corridos / {dias_ativos:.1f}d ativos)</span></h3>
                     {badge_html}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            c_p1, c_p2, c_p3, c_p4 = st.columns(4)
-            c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
-            c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
-            c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
-            c_p4.metric("Fees Totais", f"${v_fees:,.2f}")
+            # SÓ MOSTRA OS DETALHES SE A OPÇÃO DE ESCONDER ESTIVER DESATIVADA
+            if not esconder_detalhes:
+                c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+                c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
+                c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
+                c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
+                c_p4.metric("Fees Totais", f"${v_fees:,.2f}")
 
-            if estado != "Fechada":
-                render_sparkline_chart(p_nat, r_min, r_max)
+                if estado != "Fechada":
+                    render_sparkline_chart(p_nat, r_min, r_max)
 
-            c_p5, c_p6, c_p7, c_p8 = st.columns(4)
-            c_p5.metric("Dia Corrido", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
-            c_p6.metric("Dia Efetivo", f"${fees_dia_ativo:,.2f}/d", delta=f"{apr_ativo:.1f}% APR")
-            c_p7.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
-            if addr:
-                c_p8.markdown(f"<br>[🔍 DexScreener](https://dexscreener.com/search?q={addr})", unsafe_allow_html=True)
+                c_p5, c_p6, c_p7, c_p8 = st.columns(4)
+                c_p5.metric("Dia Corrido", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
+                c_p6.metric("Dia Efetivo", f"${fees_dia_ativo:,.2f}/d", delta=f"{apr_ativo:.1f}% APR")
+                c_p7.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
+                if addr:
+                    c_p8.markdown(f"<br>[🔍 DexScreener](https://dexscreener.com/search?q={addr})", unsafe_allow_html=True)
 
             st.markdown("---")
 
@@ -677,7 +682,6 @@ with tab_table:
     if pools_processadas:
         df_table = pd.DataFrame(pools_processadas)
         
-        # Selecionar e renomear colunas para apresentação clara
         cols_display = {
             "id": "ID",
             "par": "Par",
@@ -691,11 +695,9 @@ with tab_table:
             "dias_corridos": "Dias Corridos"
         }
         
-        # Filtrar apenas as colunas pretendidas que existem no DataFrame
         existing_cols = [c for c in cols_display.keys() if c in df_table.columns]
         df_display = df_table[existing_cols].rename(columns=cols_display)
         
-        # Formatação amigável de valores monetários
         if "Ganhos / Perdas ($ USD)" in df_display.columns:
             df_display["Ganhos / Perdas ($ USD)"] = df_display["Ganhos / Perdas ($ USD)"].apply(lambda x: f"${x:,.2f}")
         if "Investido ($)" in df_display.columns:
