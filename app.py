@@ -272,7 +272,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
         for p in pools:
             estado_norm = normalizar_estado(p.get("estado"))
             
-            # PROTEÇÃO ABSOLUTA: Se a pool estiver Fechada, ignora completamente a sincronização
+            # BLINDAGEM ABSOLUTA DE POOLS FECHADAS
             if estado_norm == "Fechada":
                 continue
                 
@@ -352,6 +352,7 @@ for p in pools:
     
     estado = normalizar_estado(p.get("estado"))
 
+    # Força a contagem correta
     if estado == "Fechada":
         v_atual_final = v_at
     else:
@@ -631,7 +632,7 @@ with tab_edit:
     if not pools:
         st.info("Não existem pools para editar.")
     else:
-        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')} [{p.get('estado', 'Ativa')}]": p for p in pools}
+        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')} [{normalizar_estado(p.get('estado'))}]": p for p in pools}
         escolha = st.selectbox("Selecione a Pool:", list(lista_opcoes.keys()))
         pool_sel = lista_opcoes[escolha]
         
