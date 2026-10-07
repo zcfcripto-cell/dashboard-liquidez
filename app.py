@@ -237,14 +237,14 @@ def calcular_il(razao_preco):
     return il * 100
 
 # -----------------------------------------------------------------------------
-# 4. BARRA LATERAL & SINCRONIZAÇÃO
+# 4. BARRA LATERAL & OPÇÕES
 # -----------------------------------------------------------------------------
 pools = get_pools()
 
 st.sidebar.title("⚡ DeFi Hub Pro")
 filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Apenas Abertas (Ativas/Fora)", "Ativas 🟢", "Fora de Range 🔴", "Fechadas 📁", "Todas"])
 
-# BOTÃO / TOGGLE PARA ESCONDER DETALHES
+# TOGGLE PARA ESCONDER DETALHES DAS POOLS
 esconder_detalhes = st.sidebar.checkbox("👁️ Ocultar Detalhes das Pools", value=False)
 
 st.sidebar.markdown("---")
@@ -374,6 +374,21 @@ valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
+# BOTÃO DE SNAPSHOT MANUAL NA BARRA LATERAL
+if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
+    hoje = datetime.now().strftime('%Y-%m-%d')
+    payload_pnl = {
+        "data": hoje,
+        "valor_total_usd": round(valor_total_com_fees, 2)
+    }
+    res = requests.post(f"{SUPABASE_URL}/rest/v1/historico_pnl", headers=headers, json=payload_pnl)
+    if res.status_code in [200, 201]:
+        st.sidebar.success(f"Snapshot de {hoje} (${valor_total_com_fees:,.2f}) guardado!")
+        time.sleep(1)
+        st.rerun()
+    else:
+        st.sidebar.error("Erro ao guardar snapshot no Supabase.")
+
 if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
     msg_resumo = (
         f"📊 <b>PORTFÓLIO DEFI</b>\n\n"
@@ -473,7 +488,6 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-            # SÓ MOSTRA OS DETALHES SE A OPÇÃO DE ESCONDER ESTIVER DESATIVADA
             if not esconder_detalhes:
                 c_p1, c_p2, c_p3, c_p4 = st.columns(4)
                 c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
