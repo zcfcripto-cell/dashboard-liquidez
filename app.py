@@ -650,7 +650,7 @@ with tab_edit:
                     st.success("Pool eliminada!")
                     st.rerun()
 
-# TAB 3: Calculadora de Rebalanceamento & IL (CORRIGIDA)
+# TAB 3: Calculadora de Rebalanceamento & IL
 with tab_calc:
     col_c1, col_c2 = st.columns(2)
 
@@ -672,12 +672,42 @@ with tab_calc:
         il_resultado = calcular_il(razao)
         st.metric("IL Estimada", f"{il_resultado:.2f}%", delta=f"{il_resultado:.2f}%", delta_color="inverse")
 
-# TAB 4: Tabela Resumo (CORRIGIDA COM HIGIENIZAÇÃO DE DADOS)
+# TAB 4: Tabela Resumo (Com Coluna de PnL / Ganhos e Perdas em USD)
 with tab_table:
-    if pools:
-        df_table = pd.DataFrame(pools)
-        # Preencher valores nulos para evitar falhas de visualização no Pandas/Streamlit
-        df_table = df_table.fillna("")
-        st.dataframe(df_table, use_container_width=True, hide_index=True)
+    if pools_processadas:
+        df_table = pd.DataFrame(pools_processadas)
+        
+        # Selecionar e renomear colunas para apresentação clara
+        cols_display = {
+            "id": "ID",
+            "par": "Par",
+            "estado": "Estado",
+            "v_inicial_calc": "Investido ($)",
+            "v_atual_calc": "Valor Final ($)",
+            "fees_calc": "Fees ($)",
+            "pnl_pool": "Ganhos / Perdas ($ USD)",
+            "roi_pool": "ROI (%)",
+            "data_entrada": "Data Entrada",
+            "dias_corridos": "Dias Corridos"
+        }
+        
+        # Filtrar apenas as colunas pretendidas que existem no DataFrame
+        existing_cols = [c for c in cols_display.keys() if c in df_table.columns]
+        df_display = df_table[existing_cols].rename(columns=cols_display)
+        
+        # Formatação amigável de valores monetários
+        if "Ganhos / Perdas ($ USD)" in df_display.columns:
+            df_display["Ganhos / Perdas ($ USD)"] = df_display["Ganhos / Perdas ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        if "Investido ($)" in df_display.columns:
+            df_display["Investido ($)"] = df_display["Investido ($)"].apply(lambda x: f"${x:,.2f}")
+        if "Valor Final ($)" in df_display.columns:
+            df_display["Valor Final ($)"] = df_display["Valor Final ($)"].apply(lambda x: f"${x:,.2f}")
+        if "Fees ($)" in df_display.columns:
+            df_display["Fees ($)"] = df_display["Fees ($)"].apply(lambda x: f"${x:,.2f}")
+        if "ROI (%)" in df_display.columns:
+            df_display["ROI (%)"] = df_display["ROI (%)"].apply(lambda x: f"{x:.2f}%")
+
+        df_display = df_display.fillna("")
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
         st.info("Nenhuma posição registada na base de dados.")
