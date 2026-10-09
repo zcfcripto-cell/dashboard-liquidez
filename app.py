@@ -107,7 +107,7 @@ headers = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. FUNÇÕES AUXILIARES, RPC SOLANA/ROBINHOOD & DEFILLAMA
+# 3. FUNÇÕES AUXILIARES, RPC SOLANA/UNISWAP & DEFILLAMA
 # -----------------------------------------------------------------------------
 def normalizar_estado(estado_raw):
     e = str(estado_raw or "").strip().lower()
@@ -183,38 +183,19 @@ def fetch_raydium_clmm_pending_fees(position_pubkey, price_usd=1.0):
 
 def fetch_uniswap_v3_pending_fees(nft_token_id, price_usd=1.0):
     """
-    Lê as fees pendentes de um NFT de Posição da Uniswap V3 via RPC EVM (Robinhood / EVM).
+    Consulta o valor estimado de fees pendentes do NFT Uniswap V3 via API indexada.
     """
-    if not EVM_RPC_URL or not str(nft_token_id).isdigit():
+    token_str = str(nft_token_id).strip()
+    if not token_str.isdigit():
         return 0.0
-    
-    # Endereço Canónico do NonfungiblePositionManager
-    UNISWAP_V3_POS_MANAGER = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
-    
-    token_id_hex = hex(int(nft_token_id))[2:].zfill(64)
-    data_call = f"0x99fbab88{token_id_hex}"
-    
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "eth_call",
-        "params": [
-            {"to": UNISWAP_V3_POS_MANAGER, "data": data_call},
-            "latest"
-        ]
-    }
+
+    url = f"https://api.uniswap.org/v1/positions/{token_str}"
     try:
-        res = requests.post(EVM_RPC_URL, json=payload, timeout=8)
+        res = requests.get(url, timeout=5)
         if res.status_code == 200:
-            result_hex = res.json().get("result", "")
-            if len(result_hex) >= 660:
-                tokens_owed0_hex = result_hex[578:642]
-                tokens_owed1_hex = result_hex[642:706]
-                
-                owed0 = int(tokens_owed0_hex, 16) / 1e18
-                owed1 = int(tokens_owed1_hex, 16) / 1e6
-                
-                return (owed0 * price_usd) + owed1
+            data = res.json()
+            unclaimed_usd = data.get("unclaimedFeesUsd", 0.0)
+            return float(unclaimed_usd)
     except Exception:
         pass
     return 0.0
