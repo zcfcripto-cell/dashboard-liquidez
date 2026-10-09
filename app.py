@@ -2,8 +2,6 @@ import os
 import time
 import math
 import random
-import base64
-import struct
 from datetime import datetime, date
 import requests
 import pandas as pd
@@ -96,8 +94,6 @@ if SUPABASE_URL and not SUPABASE_URL.startswith("http"):
 SUPABASE_KEY = get_secret("SUPABASE_KEY")
 TELEGRAM_BOT_TOKEN = get_secret(["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"])
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
-SOLANA_RPC_URL = get_secret("SOLANA_RPC_URL")
-EVM_RPC_URL = get_secret(["EVM_RPC_URL", "ETH_RPC_URL"], "https://rpc.mainnet.chain.robinhood.com")
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -107,7 +103,7 @@ headers = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. FUNÇÕES AUXILIARES, RPC SOLANA/UNISWAP & DEFILLAMA
+# 3. FUNÇÕES AUXILIARES & APIS PÚBLICAS
 # -----------------------------------------------------------------------------
 def normalizar_estado(estado_raw):
     e = str(estado_raw or "").strip().lower()
@@ -150,64 +146,44 @@ def fetch_dexscreener_data(pair_address):
         pass
     return None, None
 
-def fetch_raydium_clmm_pending_fees(position_pubkey, price_usd=1.0):
-    if not SOLANA_RPC_URL or not position_pubkey or len(str(position_pubkey).strip()) < 20:
-        return 0.0
-
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "getAccountInfo",
-        "params": [
-            str(position_pubkey).strip(),
-            {"encoding": "base64"}
-        ]
-    }
-    try:
-        res = requests.post(SOLANA_RPC_URL, json=payload, timeout=8)
-        if res.status_code == 200:
-            val = res.json().get("result", {}).get("value")
-            if not val or "data" not in val:
-                return 0.0
-            
-            raw_data = base64.b64decode(val["data"][0])
-            if len(raw_data) >= 120:
-                fees_a_raw = struct.unpack_from("<Q", raw_data, offset=104)[0]
-                fees_b_raw = struct.unpack_from("<Q", raw_data, offset=112)[0]
-                fees_a = fees_a_raw / 1e6
-                fees_b = fees_b_raw / 1e6
-                return (fees_a * price_usd) + fees_b
-    except Exception:
-        pass
-    return 0.0
-
-def fetch_uniswap_v3_pending_fees(nft_token_id, price_usd=1.0):
+def fetch_raydium_clmm_fees_api(position_pubkey):
     """
-    Consulta o valor estimado de fees pendentes do NFT Uniswap V3 via API indexada.
+    Consulta o valor das fees acumuladas via API oficial v3 da Raydium.
     """
-    token_str = str(nft_token_id).strip()
-    if not token_str.isdigit():
+    pos_str = str(position_pubkey or "").strip()
+    if not pos_str or len(pos_str) < 20 or pos_str.isdigit():
         return 0.0
-
-    url = f"https://api.uniswap.org/v1/positions/{token_str}"
+    
+    url = f"https://api-v3.raydium.io/clmm/position/id?id={pos_str}"
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, timeout=8)
         if res.status_code == 200:
             data = res.json()
-            unclaimed_usd = data.get("unclaimedFeesUsd", 0.0)
-            return float(unclaimed_usd)
+            if data.get("success") and "data" in data:
+                pos_data = data["data"]
+                unclaimed_a = float(pos_data.get("unclaimedFeeA", 0) or 0)
+                unclaimed_b = float(pos_data.get("unclaimedFeeB", 0) or 0)
+                price_a = float(pos_data.get("tokenA", {}).get("price", 0) or 0)
+                price_b = float(pos_data.get("tokenB", {}).get("price", 0) or 0)
+                
+                return (unclaimed_a * price_a) + (unclaimed_b * price_b)
     except Exception:
         pass
     return 0.0
 
-def calcular_fees_pendentes(pos_pubkey, price_usd=1.0):
-    val_str = str(pos_pubkey or "").strip()
+def calcular_fees_por_recolher(position_pubkey):
+    val_str = str(position_pubkey or "").strip()
     if not val_str:
         return 0.0
-    if val_str.isdigit():
-        return fetch_uniswap_v3_pending_fees(val_str, price_usd)
-    else:
-        return fetch_raydium_clmm_pending_fees(val_str, price_usd)
+    
+    # Se for um valor numérico simples (manual/editado no dashboard)
+    try:
+        return float(val_str)
+    except ValueError:
+        pass
+    
+    # Se for o endereço da conta Raydium CLMM
+    return fetch_raydium_clmm_fees_api(val_str)
 
 @st.cache_data(ttl=3600)
 def fetch_defillama_yields():
@@ -335,7 +311,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
         for p in pools:
             estado_raw_str = str(p.get("estado") or "").strip().lower()
             
-            # PROTEÇÃO ABSOLUTA: Ignora completamente pools Fechadas
+            # BLINDAGEM COMPLETA: Pools Fechadas NUNCA mudam para Inativa
             if "fechad" in estado_raw_str or "clos" in estado_raw_str:
                 continue
                 
@@ -410,18 +386,17 @@ for p in pools:
     v_inv = to_float(p.get("valor_inicial"))
     v_at = to_float(p.get("valor_atual"))
     v_fees_reg = to_float(p.get("fees"))
+    pos_pubkey = p.get("position_pubkey", "")
     data_ent = p.get("data_entrada", "")
     hrs_inativa = to_float(p.get("horas_inativa"))
-    pos_pubkey = p.get("position_pubkey", "")
-    p_usd = to_float(p.get("preco_atual"), default=1.0)
     
     estado = normalizar_estado(p.get("estado"))
 
-    fees_pendentes = 0.0
-    if pos_pubkey and estado != "Fechada":
-        fees_pendentes = calcular_fees_pendentes(pos_pubkey, p_usd)
+    fees_por_recolher = 0.0
+    if estado != "Fechada" and pos_pubkey:
+        fees_por_recolher = calcular_fees_por_recolher(pos_pubkey)
 
-    v_fees_totais = v_fees_reg + fees_pendentes
+    v_fees_totais = v_fees_reg + fees_por_recolher
 
     if estado == "Fechada":
         v_atual_final = v_at
@@ -459,7 +434,7 @@ for p in pools:
     p_item["v_atual_calc"] = v_atual_final
     p_item["fees_reg_calc"] = v_fees_reg
     p_item["fees_calc"] = v_fees_totais
-    p_item["fees_pendentes_helius"] = fees_pendentes
+    p_item["fees_pendentes_calc"] = fees_por_recolher
     p_item["pnl_pool"] = pnl_pool
     p_item["roi_pool"] = roi_pool
     p_item["dias_corridos"] = dias_corridos
@@ -546,7 +521,7 @@ else:
         v_at = p["v_atual_calc"]
         v_fees_reg = p["fees_reg_calc"]
         v_fees_totais = p["fees_calc"]
-        v_fees_pend = p["fees_pendentes_helius"]
+        v_fees_pend = p["fees_pendentes_calc"]
         pnl_pool = p["pnl_pool"]
         roi_pool = p["roi_pool"]
         
@@ -559,7 +534,6 @@ else:
         
         hrs_inativa = to_float(p.get("horas_inativa"))
         addr = p.get("wallet_address", "")
-        pos_pubkey = p.get("position_pubkey", "")
 
         tipo_desvio = "EM RANGE"
         if r_max > 0 and p_nat > r_max:
@@ -596,7 +570,7 @@ else:
                 c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
                 
                 if v_fees_pend > 0:
-                    c_p4.metric("Fees Registadas", f"${v_fees_reg:,.2f}", delta=f"+${v_fees_pend:,.2f} pendentes ⚡")
+                    c_p4.metric("Fees Resgatadas", f"${v_fees_reg:,.2f}", delta=f"+${v_fees_pend:,.2f} por recolher ⚡")
                 else:
                     c_p4.metric("Fees Totais", f"${v_fees_totais:,.2f}")
 
@@ -608,9 +582,7 @@ else:
                 c_p6.metric("Dia Efetivo", f"${fees_dia_ativo:,.2f}/d", delta=f"{apr_ativo:.1f}% APR")
                 c_p7.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
                 
-                if pos_pubkey:
-                    c_p8.markdown(f"<br>⚡ <b>Por Recolher:</b> <span style='color:#10b981; font-weight:bold;'>${v_fees_pend:,.2f}</span>", unsafe_allow_html=True)
-                elif addr:
+                if addr:
                     c_p8.markdown(f"<br>[🔍 DexScreener](https://dexscreener.com/search?q={addr})", unsafe_allow_html=True)
 
             st.markdown("---")
@@ -669,7 +641,7 @@ tab_add, tab_edit, tab_calc, tab_table, tab_llama = st.tabs([
 with tab_add:
     with st.form("form_add_pool"):
         c1, c2, c3 = st.columns(3)
-        par_in = c1.text_input("Par (ex: ETH/USDC ou PUMP/SOL)", "")
+        par_in = c1.text_input("Par (ex: SOL/USDC)", "")
         addr_in = c2.text_input("Pair Address (DexScreener)", "")
         invest_in = c3.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
 
@@ -679,9 +651,9 @@ with tab_add:
         v_atual_in = c6.number_input("Valor Atual ($ USD)", min_value=0.0, step=10.0)
         
         c7, c8, c9 = st.columns(3)
-        fees_in = c7.number_input("Fees Geradas / Resgatadas ($ USD)", min_value=0.0, step=1.0)
-        data_ent_in = c8.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
-        pos_pubkey_in = c9.text_input("Position Account (Raydium) ou Token ID (Uniswap V3)", "")
+        fees_in = c7.number_input("Fees Já Resgatadas ($ USD)", min_value=0.0, step=1.0)
+        pos_pubkey_in = c8.text_input("Raydium CLMM Position Account (ou Valor Manual em $)", "")
+        data_ent_in = c9.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
 
         btn_save = st.form_submit_button("Salvar Nova Pool")
 
@@ -728,15 +700,13 @@ with tab_edit:
 
             e1, e2, e3 = st.columns(3)
             e_val_atual = e1.number_input("Valor Atual ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
-            e_fees = e2.number_input("Fees Resgatadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
-            e_data_ent = e3.text_input("Data Entrada", value=str(pool_sel.get("data_entrada", "")))
+            e_fees = e2.number_input("Fees Já Resgatadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
+            e_pos_pubkey = st.text_input("Raydium CLMM Position Account (ou Valor Manual em $)", value=str(pool_sel.get("position_pubkey", "")))
 
             e4, e5, e6 = st.columns(3)
             e_rmin = e4.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
             e_rmax = e5.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
-            e_hrs_inativa = e6.number_input("Horas Inativa", value=to_float(pool_sel.get("horas_inativa")), step=1.0)
-
-            e_pos_pubkey = st.text_input("Position Account (Raydium) ou Token ID (Uniswap V3)", value=str(pool_sel.get("position_pubkey", "")))
+            e_data_ent = e6.text_input("Data Entrada", value=str(pool_sel.get("data_entrada", "")))
 
             btn_update = st.form_submit_button("💾 Guardar Alterações")
 
@@ -749,7 +719,6 @@ with tab_edit:
                     "data_entrada": e_data_ent,
                     "range_min": e_rmin,
                     "range_max": e_rmax,
-                    "horas_inativa": e_hrs_inativa,
                     "position_pubkey": e_pos_pubkey
                 }
                 res = requests.patch(patch_url, headers=headers, json=update_payload)
@@ -817,7 +786,7 @@ with tab_table:
             "v_inicial_calc": "Investido ($)",
             "v_atual_calc": "Valor Final ($)",
             "fees_calc": "Fees Totais ($)",
-            "fees_pendentes_helius": "Fees Por Recolher ($)",
+            "fees_pendentes_calc": "Fees Por Recolher ($)",
             "pnl_pool": "Ganhos / Perdas ($ USD)",
             "roi_pool": "ROI (%)",
             "data_entrada": "Data Entrada",
