@@ -270,10 +270,10 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     with st.spinner("A atualizar posições abertas..."):
         agora = time.time()
         for p in pools:
-            estado_raw_str = str(p.get("estado") or "").strip().lower()
+            estado_anterior = normalizar_estado(p.get("estado"))
             
-            # PROTEÇÃO ABSOLUTA: Pools Fechadas NUNCA são alteradas
-            if "fechad" in estado_raw_str or "clos" in estado_raw_str:
+            # FILTRO CRÍTICO: Ignora imediatamente se a pool estiver marcada como Fechada
+            if estado_anterior == "Fechada":
                 continue
                 
             addr = p.get("wallet_address")
@@ -296,7 +296,6 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
                         desvio_txt = f"-{pct:.2f}% mín"
                     
                     novo_estado = "Ativa" if in_range else "Inativa"
-                    estado_anterior = normalizar_estado(p.get("estado"))
                     last_update = to_float(p.get("last_price_update"))
                     horas_inativas_atuais = to_float(p.get("horas_inativa"))
                     
@@ -321,6 +320,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
                         
                     requests.patch(patch_url, headers=headers, json=patch_data)
 
+                    # APENAS DISPARA TELEGRAM SE NÃO FOR FECHADA
                     if novo_estado == "Inativa" and estado_anterior == "Ativa":
                         send_telegram(f"🚨 <b>FORA DE RANGE:</b> {par}\nPreço: {format_crypto_price(p_nat)}\nDesvio: {desvio_txt}")
                     elif novo_estado == "Ativa" and estado_anterior == "Inativa":
@@ -526,7 +526,6 @@ else:
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
                 c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
                 
-                # Exibição explícita do valor das Fees Resgatadas e Fees Por Recolher
                 if v_fees_pend > 0:
                     c_p4.metric("Fees Registadas", f"${v_fees_reg:,.2f}", delta=f"+${v_fees_pend:,.2f} por recolher ⚡")
                 else:
@@ -540,7 +539,6 @@ else:
                 c_p6.metric("Dia Efetivo", f"${fees_dia_ativo:,.2f}/d", delta=f"{apr_ativo:.1f}% APR")
                 c_p7.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
                 
-                # Quarta coluna: exibe o detalhe do valor por recolher
                 c_p8.markdown(f"<br>⚡ <b>Fees por Recolher:</b> <span style='color:#10b981; font-weight:bold;'>${v_fees_pend:,.2f}</span>", unsafe_allow_html=True)
 
             st.markdown("---")
