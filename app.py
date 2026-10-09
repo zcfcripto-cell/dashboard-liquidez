@@ -110,7 +110,7 @@ headers = {
 # -----------------------------------------------------------------------------
 def normalizar_estado(estado_raw):
     e = str(estado_raw or "").strip().lower()
-    if "fechad" in e or "closed" in e:
+    if "fechad" in e or "closed" in e or "fechada" in e:
         return "Fechada"
     elif "inativ" in e or "fora" in e:
         return "Inativa"
@@ -150,9 +150,6 @@ def fetch_dexscreener_data(pair_address):
     return None, None
 
 def fetch_raydium_clmm_pending_fees(position_pubkey, price_usd=1.0):
-    """
-    Lê os dados da posição na Solana via Helius RPC de forma 100% segura (Read-Only).
-    """
     if not SOLANA_RPC_URL or not position_pubkey or len(str(position_pubkey).strip()) < 20:
         return 0.0
 
@@ -307,10 +304,10 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     with st.spinner("A atualizar posições abertas..."):
         agora = time.time()
         for p in pools:
-            estado_norm = normalizar_estado(p.get("estado"))
+            estado_raw_str = str(p.get("estado") or "").strip().lower()
             
-            # BLOQUEIO DEFINITIVO: Posições Fechadas nunca são alteradas pela sincronização
-            if estado_norm == "Fechada":
+            # PROTEÇÃO ABSOLUTA: Ignora completamente pools Fechadas de qualquer forma escrita
+            if "fechad" in estado_raw_str or "clos" in estado_raw_str:
                 continue
                 
             addr = p.get("wallet_address")
@@ -333,7 +330,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
                         desvio_txt = f"-{pct:.2f}% mín"
                     
                     novo_estado = "Ativa" if in_range else "Inativa"
-                    estado_anterior = estado_norm
+                    estado_anterior = normalizar_estado(p.get("estado"))
                     last_update = to_float(p.get("last_price_update"))
                     horas_inativas_atuais = to_float(p.get("horas_inativa"))
                     
@@ -391,7 +388,6 @@ for p in pools:
     
     estado = normalizar_estado(p.get("estado"))
 
-    # Consulta de Fees Pendentes via Helius RPC se o endereço da posição existir
     fees_pendentes = 0.0
     if pos_pubkey and estado != "Fechada":
         fees_pendentes = fetch_raydium_clmm_pending_fees(pos_pubkey, p_usd)
@@ -449,7 +445,6 @@ valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
-# BOTÃO DE SNAPSHOT MANUAL
 if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
     hoje = datetime.now().strftime('%Y-%m-%d')
     payload_pnl = {
@@ -566,13 +561,11 @@ else:
             """, unsafe_allow_html=True)
 
             if not esconder_detalhes:
-                # Linha 1 de métricas
                 c_p1, c_p2, c_p3, c_p4 = st.columns(4)
                 c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
                 c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
                 
-                # Exibe Fees Registadas e destaca as Pendentes (se existirem)
                 if v_fees_pend > 0:
                     c_p4.metric("Fees Registadas", f"${v_fees_reg:,.2f}", delta=f"+${v_fees_pend:,.2f} pendentes ⚡")
                 else:
@@ -581,13 +574,11 @@ else:
                 if estado != "Fechada":
                     render_sparkline_chart(p_nat, r_min, r_max)
 
-                # Linha 2 de métricas
                 c_p5, c_p6, c_p7, c_p8 = st.columns(4)
                 c_p5.metric("Dia Corrido", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
                 c_p6.metric("Dia Efetivo", f"${fees_dia_ativo:,.2f}/d", delta=f"{apr_ativo:.1f}% APR")
                 c_p7.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
                 
-                # Campo dedicado para visualização das Fees por Recolher em tempo real
                 if pos_pubkey:
                     c_p8.markdown(f"<br>⚡ <b>Por Recolher:</b> <span style='color:#10b981; font-weight:bold;'>${v_fees_pend:,.2f}</span>", unsafe_allow_html=True)
                 elif addr:
