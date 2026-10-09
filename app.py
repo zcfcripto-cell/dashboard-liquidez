@@ -94,6 +94,7 @@ if SUPABASE_URL and not SUPABASE_URL.startswith("http"):
 SUPABASE_KEY = get_secret("SUPABASE_KEY")
 TELEGRAM_BOT_TOKEN = get_secret(["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"])
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
+SOLANA_RPC_URL = get_secret("SOLANA_RPC_URL")
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -103,8 +104,16 @@ headers = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. FUNÇÕES AUXILIARES & DEFILLAMA
+# 3. FUNÇÕES AUXILIARES, SOLANA RPC & DEFILLAMA
 # -----------------------------------------------------------------------------
+def normalizar_estado(estado_raw):
+    e = str(estado_raw or "").strip().lower()
+    if "fechad" in e or "closed" in e:
+        return "Fechada"
+    elif "inativ" in e or "fora" in e:
+        return "Inativa"
+    return "Ativa"
+
 def send_telegram(message):
     bot_token = get_secret(["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"])
     chat_id = get_secret("TELEGRAM_CHAT_ID")
@@ -137,6 +146,24 @@ def fetch_dexscreener_data(pair_address):
     except Exception:
         pass
     return None, None
+
+def fetch_solana_account_info(account_pubkey):
+    """Consulta pública e 100% segura de dados de contas na Solana (Raydium)"""
+    if not SOLANA_RPC_URL or not account_pubkey:
+        return None
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getAccountInfo",
+        "params": [account_pubkey, {"encoding": "jsonParsed"}]
+    }
+    try:
+        res = requests.post(SOLANA_RPC_URL, json=payload, timeout=8)
+        if res.status_code == 200:
+            return res.json().get("result", {}).get("value")
+    except Exception:
+        pass
+    return None
 
 @st.cache_data(ttl=3600)
 def fetch_defillama_yields():
@@ -247,14 +274,6 @@ def calcular_il(razao_preco):
     il = (2 * math.sqrt(razao_preco) / (1 + razao_preco)) - 1
     return il * 100
 
-def normalizar_estado(estado_raw):
-    e = str(estado_raw or "").strip().lower()
-    if "fechad" in e or "closed" in e:
-        return "Fechada"
-    elif "inativ" in e or "fora" in e:
-        return "Inativa"
-    return "Ativa"
-
 # -----------------------------------------------------------------------------
 # 4. BARRA LATERAL & OPÇÕES
 # -----------------------------------------------------------------------------
@@ -272,7 +291,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
         for p in pools:
             estado_norm = normalizar_estado(p.get("estado"))
             
-            # BLINDAGEM ABSOLUTA DE POOLS FECHADAS
+            # BLOQUEIO DEFINITIVO: NUNCA sincroniza nem altera posições Fechadas no Supabase
             if estado_norm == "Fechada":
                 continue
                 
@@ -352,7 +371,6 @@ for p in pools:
     
     estado = normalizar_estado(p.get("estado"))
 
-    # Força a contagem correta
     if estado == "Fechada":
         v_atual_final = v_at
     else:
