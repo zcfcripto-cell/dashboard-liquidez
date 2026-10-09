@@ -97,6 +97,7 @@ SUPABASE_KEY = get_secret("SUPABASE_KEY")
 TELEGRAM_BOT_TOKEN = get_secret(["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"])
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 SOLANA_RPC_URL = get_secret("SOLANA_RPC_URL")
+EVM_RPC_URL = get_secret(["EVM_RPC_URL", "ETH_RPC_URL"], "https://rpc.ankr.com/eth")
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -106,7 +107,7 @@ headers = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. FUNÇÕES AUXILIARES, HELIUS RPC & DEFILLAMA
+# 3. FUNÇÕES AUXILIARES, SOLANA/EVM RPC & DEFILLAMA
 # -----------------------------------------------------------------------------
 def normalizar_estado(estado_raw):
     e = str(estado_raw or "").strip().lower()
@@ -179,6 +180,55 @@ def fetch_raydium_clmm_pending_fees(position_pubkey, price_usd=1.0):
     except Exception:
         pass
     return 0.0
+
+def fetch_uniswap_v3_pending_fees(nft_token_id, price_usd=1.0):
+    """
+    Lê as fees pendentes de um NFT de Posição da Uniswap V3 via RPC EVM (Read-Only).
+    """
+    if not EVM_RPC_URL or not str(nft_token_id).isdigit():
+        return 0.0
+    
+    # Endereço do Uniswap V3 NonfungiblePositionManager
+    UNISWAP_V3_POS_MANAGER = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
+    
+    # Assinatura de positions(uint256) -> 0x99fbab88
+    token_id_hex = hex(int(nft_token_id))[2:].zfill(64)
+    data_call = f"0x99fbab88{token_id_hex}"
+    
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [
+            {"to": UNISWAP_V3_POS_MANAGER, "data": data_call},
+            "latest"
+        ]
+    }
+    try:
+        res = requests.post(EVM_RPC_URL, json=payload, timeout=8)
+        if res.status_code == 200:
+            result_hex = res.json().get("result", "")
+            if len(result_hex) >= 660:
+                # Extrai tokensOwed0 e tokensOwed1
+                tokens_owed0_hex = result_hex[578:642]
+                tokens_owed1_hex = result_hex[642:706]
+                
+                owed0 = int(tokens_owed0_hex, 16) / 1e18
+                owed1 = int(tokens_owed1_hex, 16) / 1e6
+                
+                return (owed0 * price_usd) + owed1
+    except Exception:
+        pass
+    return 0.0
+
+def calcular_fees_pendentes(pos_pubkey, price_usd=1.0):
+    val_str = str(pos_pubkey or "").strip()
+    if not val_str:
+        return 0.0
+    if val_str.isdigit():
+        return fetch_uniswap_v3_pending_fees(val_str, price_usd)
+    else:
+        return fetch_raydium_clmm_pending_fees(val_str, price_usd)
 
 @st.cache_data(ttl=3600)
 def fetch_defillama_yields():
@@ -390,7 +440,7 @@ for p in pools:
 
     fees_pendentes = 0.0
     if pos_pubkey and estado != "Fechada":
-        fees_pendentes = fetch_raydium_clmm_pending_fees(pos_pubkey, p_usd)
+        fees_pendentes = calcular_fees_pendentes(pos_pubkey, p_usd)
 
     v_fees_totais = v_fees_reg + fees_pendentes
 
@@ -640,7 +690,7 @@ tab_add, tab_edit, tab_calc, tab_table, tab_llama = st.tabs([
 with tab_add:
     with st.form("form_add_pool"):
         c1, c2, c3 = st.columns(3)
-        par_in = c1.text_input("Par (ex: PUMP/SOL)", "")
+        par_in = c1.text_input("Par (ex: ETH/USDC ou PUMP/SOL)", "")
         addr_in = c2.text_input("Pair Address (DexScreener)", "")
         invest_in = c3.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
 
@@ -652,7 +702,7 @@ with tab_add:
         c7, c8, c9 = st.columns(3)
         fees_in = c7.number_input("Fees Geradas / Resgatadas ($ USD)", min_value=0.0, step=1.0)
         data_ent_in = c8.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
-        pos_pubkey_in = c9.text_input("Position Account / NFT Address (Opcional - Raydium)", "")
+        pos_pubkey_in = c9.text_input("Position Account (Raydium) ou Token ID (Uniswap V3)", "")
 
         btn_save = st.form_submit_button("Salvar Nova Pool")
 
@@ -707,7 +757,7 @@ with tab_edit:
             e_rmax = e5.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
             e_hrs_inativa = e6.number_input("Horas Inativa", value=to_float(pool_sel.get("horas_inativa")), step=1.0)
 
-            e_pos_pubkey = st.text_input("Position Account / NFT Address (Raydium)", value=str(pool_sel.get("position_pubkey", "")))
+            e_pos_pubkey = st.text_input("Position Account (Raydium) ou Token ID (Uniswap V3)", value=str(pool_sel.get("position_pubkey", "")))
 
             btn_update = st.form_submit_button("💾 Guardar Alterações")
 
