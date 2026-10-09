@@ -2,6 +2,8 @@ import os
 import time
 import math
 import random
+import base64
+import struct
 from datetime import datetime, date
 import requests
 import pandas as pd
@@ -104,7 +106,7 @@ headers = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. FUNÇÕES AUXILIARES, SOLANA RPC & DEFILLAMA
+# 3. FUNÇÕES AUXILIARES, HELIUS RPC & DEFILLAMA
 # -----------------------------------------------------------------------------
 def normalizar_estado(estado_raw):
     e = str(estado_raw or "").strip().lower()
@@ -147,23 +149,39 @@ def fetch_dexscreener_data(pair_address):
         pass
     return None, None
 
-def fetch_solana_account_info(account_pubkey):
-    """Consulta pública e 100% segura de dados de contas na Solana (Raydium)"""
-    if not SOLANA_RPC_URL or not account_pubkey:
-        return None
+def fetch_raydium_clmm_pending_fees(position_pubkey, price_usd=1.0):
+    """
+    Lê os dados da posição na Solana via Helius RPC de forma 100% segura (Read-Only).
+    """
+    if not SOLANA_RPC_URL or not position_pubkey or len(str(position_pubkey).strip()) < 20:
+        return 0.0
+
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "getAccountInfo",
-        "params": [account_pubkey, {"encoding": "jsonParsed"}]
+        "params": [
+            str(position_pubkey).strip(),
+            {"encoding": "base64"}
+        ]
     }
     try:
         res = requests.post(SOLANA_RPC_URL, json=payload, timeout=8)
         if res.status_code == 200:
-            return res.json().get("result", {}).get("value")
+            val = res.json().get("result", {}).get("value")
+            if not val or "data" not in val:
+                return 0.0
+            
+            raw_data = base64.b64decode(val["data"][0])
+            if len(raw_data) >= 120:
+                fees_a_raw = struct.unpack_from("<Q", raw_data, offset=104)[0]
+                fees_b_raw = struct.unpack_from("<Q", raw_data, offset=112)[0]
+                fees_a = fees_a_raw / 1e6
+                fees_b = fees_b_raw / 1e6
+                return (fees_a * price_usd) + fees_b
     except Exception:
         pass
-    return None
+    return 0.0
 
 @st.cache_data(ttl=3600)
 def fetch_defillama_yields():
@@ -291,7 +309,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
         for p in pools:
             estado_norm = normalizar_estado(p.get("estado"))
             
-            # BLOQUEIO DEFINITIVO: NUNCA sincroniza nem altera posições Fechadas no Supabase
+            # PROTEÇÃO ABSOLUTA: Pools Fechadas NUNCA são alteradas
             if estado_norm == "Fechada":
                 continue
                 
@@ -365,32 +383,41 @@ pools_processadas = []
 for p in pools:
     v_inv = to_float(p.get("valor_inicial"))
     v_at = to_float(p.get("valor_atual"))
-    v_fees = to_float(p.get("fees"))
+    v_fees_reg = to_float(p.get("fees"))
     data_ent = p.get("data_entrada", "")
     hrs_inativa = to_float(p.get("horas_inativa"))
+    pos_pubkey = p.get("position_pubkey", "")
+    p_usd = to_float(p.get("preco_atual"), default=1.0)
     
     estado = normalizar_estado(p.get("estado"))
+
+    # Consulta de Fees Pendentes via Helius RPC se a conta da posição existir
+    fees_pendentes = 0.0
+    if pos_pubkey and estado != "Fechada":
+        fees_pendentes = fetch_raydium_clmm_pending_fees(pos_pubkey, p_usd)
+
+    v_fees_totais = v_fees_reg + fees_pendentes
 
     if estado == "Fechada":
         v_atual_final = v_at
     else:
         v_atual_final = v_at if v_at > 0 else v_inv
 
-    pnl_pool = (v_atual_final + v_fees) - v_inv
+    pnl_pool = (v_atual_final + v_fees_totais) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
 
     dias_corridos, dias_ativos = calcular_dias_metricas(data_ent, hrs_inativa)
     
-    fees_dia_corrido = v_fees / dias_corridos
-    apr_corrido = ((v_fees / v_inv) / dias_corridos * 365 * 100) if v_inv > 0 else 0.0
+    fees_dia_corrido = v_fees_totais / dias_corridos
+    apr_corrido = ((v_fees_totais / v_inv) / dias_corridos * 365 * 100) if v_inv > 0 else 0.0
 
-    fees_dia_ativo = v_fees / dias_ativos
-    apr_ativo = ((v_fees / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
+    fees_dia_ativo = v_fees_totais / dias_ativos
+    apr_ativo = ((v_fees_totais / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
 
     if estado != "Fechada":
         total_investido += v_inv
         total_valor_atual += v_atual_final
-        total_fees += v_fees
+        total_fees += v_fees_totais
         total_fees_diarias_corridas += fees_dia_corrido
         total_fees_diarias_ativas += fees_dia_ativo
 
@@ -405,7 +432,8 @@ for p in pools:
     p_item["estado"] = estado
     p_item["v_inicial_calc"] = v_inv
     p_item["v_atual_calc"] = v_atual_final
-    p_item["fees_calc"] = v_fees
+    p_item["fees_calc"] = v_fees_totais
+    p_item["fees_pendentes_helius"] = fees_pendentes
     p_item["pnl_pool"] = pnl_pool
     p_item["roi_pool"] = roi_pool
     p_item["dias_corridos"] = dias_corridos
@@ -440,7 +468,7 @@ if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
         f"📊 <b>PORTFÓLIO DEFI</b>\n\n"
         f"💰 <b>Investido:</b> ${total_investido:,.2f}\n"
         f"💵 <b>Atual:</b> ${total_valor_atual:,.2f}\n"
-        f"💸 <b>Fees:</b> ${total_fees:,.2f}\n"
+        f"💸 <b>Fees Totais:</b> ${total_fees:,.2f}\n"
         f"📈 <b>PnL:</b> ${pnl_global:,.2f} ({roi_global:.2f}%)\n"
         f"📌 <b>Ativas:</b> 🟢 {total_ativas} | 🔴 {total_inativas} | 📁 {total_fechadas}"
     )
@@ -492,9 +520,9 @@ else:
         v_inv = p["v_inicial_calc"]
         v_at = p["v_atual_calc"]
         v_fees = p["fees_calc"]
+        v_fees_pend = p["fees_pendentes_helius"]
         pnl_pool = p["pnl_pool"]
         roi_pool = p["roi_pool"]
-        data_ent = p.get("data_entrada", "N/A")
         
         dias_corridos = p["dias_corridos"]
         dias_ativos = p["dias_ativos"]
@@ -524,6 +552,10 @@ else:
             badge_html = '<span class="badge-closed">📁 FECHADA</span>'
             card_class = "pool-card pool-card-closed"
 
+        fees_label = f"${v_fees:,.2f}"
+        if v_fees_pend > 0:
+            fees_label += f" (+${v_fees_pend:,.2f} pendentes⚡)"
+
         with st.container():
             st.markdown(f"""
             <div class="{card_class}">
@@ -539,7 +571,7 @@ else:
                 c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
                 c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
-                c_p4.metric("Fees Totais", f"${v_fees:,.2f}")
+                c_p4.metric("Fees Totais", fees_label)
 
                 if estado != "Fechada":
                     render_sparkline_chart(p_nat, r_min, r_max)
@@ -608,7 +640,7 @@ with tab_add:
     with st.form("form_add_pool"):
         c1, c2, c3 = st.columns(3)
         par_in = c1.text_input("Par (ex: PUMP/SOL)", "")
-        addr_in = c2.text_input("Pair Address", "")
+        addr_in = c2.text_input("Pair Address (DexScreener)", "")
         invest_in = c3.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
 
         c4, c5, c6 = st.columns(3)
@@ -616,9 +648,10 @@ with tab_add:
         rmax_in = c5.number_input("Range Máximo", min_value=0.0, format="%.8f")
         v_atual_in = c6.number_input("Valor Atual ($ USD)", min_value=0.0, step=10.0)
         
-        c7, c8 = st.columns(2)
+        c7, c8, c9 = st.columns(3)
         fees_in = c7.number_input("Fees Geradas ($ USD)", min_value=0.0, step=1.0)
         data_ent_in = c8.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
+        pos_pubkey_in = c9.text_input("Position Account / NFT Address (Opcional - Raydium)", "")
 
         btn_save = st.form_submit_button("Salvar Nova Pool")
 
@@ -639,7 +672,8 @@ with tab_add:
                     "preco_nativo": p_nat or 0,
                     "preco_atual": p_usd or 0,
                     "estado": "Ativa",
-                    "horas_inativa": 0.0
+                    "horas_inativa": 0.0,
+                    "position_pubkey": pos_pubkey_in
                 }
                 res = requests.post(f"{SUPABASE_URL}/rest/v1/pools", headers=headers, json=payload)
                 if res.status_code in [200, 201]:
@@ -672,6 +706,8 @@ with tab_edit:
             e_rmax = e5.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
             e_hrs_inativa = e6.number_input("Horas Inativa", value=to_float(pool_sel.get("horas_inativa")), step=1.0)
 
+            e_pos_pubkey = st.text_input("Position Account / NFT Address (Raydium)", value=str(pool_sel.get("position_pubkey", "")))
+
             btn_update = st.form_submit_button("💾 Guardar Alterações")
 
             if btn_update:
@@ -683,7 +719,8 @@ with tab_edit:
                     "data_entrada": e_data_ent,
                     "range_min": e_rmin,
                     "range_max": e_rmax,
-                    "horas_inativa": e_hrs_inativa
+                    "horas_inativa": e_hrs_inativa,
+                    "position_pubkey": e_pos_pubkey
                 }
                 res = requests.patch(patch_url, headers=headers, json=update_payload)
                 if res.status_code in [200, 204]:
