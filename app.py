@@ -97,7 +97,7 @@ SUPABASE_KEY = get_secret("SUPABASE_KEY")
 TELEGRAM_BOT_TOKEN = get_secret(["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"])
 TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
 SOLANA_RPC_URL = get_secret("SOLANA_RPC_URL")
-EVM_RPC_URL = get_secret(["EVM_RPC_URL", "ETH_RPC_URL"], "https://rpc.ankr.com/eth")
+EVM_RPC_URL = get_secret(["EVM_RPC_URL", "ETH_RPC_URL"], "https://rpc.mainnet.chain.robinhood.com")
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -107,7 +107,7 @@ headers = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. FUNÇÕES AUXILIARES, SOLANA/EVM RPC & DEFILLAMA
+# 3. FUNÇÕES AUXILIARES, RPC SOLANA/ROBINHOOD & DEFILLAMA
 # -----------------------------------------------------------------------------
 def normalizar_estado(estado_raw):
     e = str(estado_raw or "").strip().lower()
@@ -183,15 +183,14 @@ def fetch_raydium_clmm_pending_fees(position_pubkey, price_usd=1.0):
 
 def fetch_uniswap_v3_pending_fees(nft_token_id, price_usd=1.0):
     """
-    Lê as fees pendentes de um NFT de Posição da Uniswap V3 via RPC EVM (Read-Only).
+    Lê as fees pendentes de um NFT de Posição da Uniswap V3 via RPC EVM (Robinhood / EVM).
     """
     if not EVM_RPC_URL or not str(nft_token_id).isdigit():
         return 0.0
     
-    # Endereço do Uniswap V3 NonfungiblePositionManager
+    # Endereço Canónico do NonfungiblePositionManager
     UNISWAP_V3_POS_MANAGER = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
     
-    # Assinatura de positions(uint256) -> 0x99fbab88
     token_id_hex = hex(int(nft_token_id))[2:].zfill(64)
     data_call = f"0x99fbab88{token_id_hex}"
     
@@ -209,7 +208,6 @@ def fetch_uniswap_v3_pending_fees(nft_token_id, price_usd=1.0):
         if res.status_code == 200:
             result_hex = res.json().get("result", "")
             if len(result_hex) >= 660:
-                # Extrai tokensOwed0 e tokensOwed1
                 tokens_owed0_hex = result_hex[578:642]
                 tokens_owed1_hex = result_hex[642:706]
                 
@@ -356,7 +354,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
         for p in pools:
             estado_raw_str = str(p.get("estado") or "").strip().lower()
             
-            # PROTEÇÃO ABSOLUTA: Ignora completamente pools Fechadas de qualquer forma escrita
+            # PROTEÇÃO ABSOLUTA: Ignora completamente pools Fechadas
             if "fechad" in estado_raw_str or "clos" in estado_raw_str:
                 continue
                 
