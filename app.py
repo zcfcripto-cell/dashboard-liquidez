@@ -32,7 +32,6 @@ st.markdown("""
     }
     .pool-card-active { border-left: 5px solid #10b981; }
     .pool-card-inactive { border-left: 5px solid #ef4444; }
-    .pool-card-closed { border-left: 5px solid #6b7280; opacity: 0.65; }
     
     .badge-active {
         background-color: rgba(16, 185, 129, 0.2);
@@ -45,14 +44,6 @@ st.markdown("""
     .badge-inactive {
         background-color: rgba(239, 68, 68, 0.2);
         color: #ef4444;
-        padding: 4px 10px;
-        border-radius: 12px;
-        font-weight: 600;
-        font-size: 0.8rem;
-    }
-    .badge-closed {
-        background-color: rgba(107, 114, 128, 0.2);
-        color: #9ca3af;
         padding: 4px 10px;
         border-radius: 12px;
         font-weight: 600;
@@ -261,7 +252,7 @@ def calcular_il(razao_preco):
 pools = get_pools()
 
 st.sidebar.title("⚡ DeFi Hub Pro")
-filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Apenas Abertas (Ativas/Fora)", "Ativas 🟢", "Fora de Range 🔴", "Fechadas 📁", "Todas"])
+filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Apenas Abertas (Ativas/Fora)", "Ativas 🟢", "Fora de Range 🔴", "Todas"])
 
 esconder_detalhes = st.sidebar.checkbox("👁️ Ocultar Detalhes das Pools", value=False)
 
@@ -271,13 +262,9 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
         agora = time.time()
         for p in pools:
             estado_anterior = normalizar_estado(p.get("estado"))
-            
-            # FILTRO CRÍTICO: Ignora imediatamente se a pool estiver marcada como Fechada
-            if estado_anterior == "Fechada":
-                continue
-                
             addr = p.get("wallet_address")
             par = p.get("par", "Par N/A")
+            
             if addr:
                 p_usd, p_nat = fetch_dexscreener_data(addr)
                 if p_nat is not None:
@@ -320,7 +307,6 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
                         
                     requests.patch(patch_url, headers=headers, json=patch_data)
 
-                    # APENAS DISPARA TELEGRAM SE NÃO FOR FECHADA
                     if novo_estado == "Inativa" and estado_anterior == "Ativa":
                         send_telegram(f"🚨 <b>FORA DE RANGE:</b> {par}\nPreço: {format_crypto_price(p_nat)}\nDesvio: {desvio_txt}")
                     elif novo_estado == "Ativa" and estado_anterior == "Inativa":
@@ -330,68 +316,68 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO
+# 5. CÁLCULO DE MÉTRICAS COMPLETO (SOMA DE FEES SACADAS + PENDENTES)
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
+total_fees_sacadas = 0.0
+total_fees_por_recolher = 0.0
 total_fees = 0.0
 total_fees_diarias_corridas = 0.0
 total_fees_diarias_ativas = 0.0
 total_ativas = 0
 total_inativas = 0
-total_fechadas = 0
 
 pools_processadas = []
 
 for p in pools:
     v_inv = to_float(p.get("valor_inicial"))
     v_at = to_float(p.get("valor_atual"))
-    v_fees_reg = to_float(p.get("fees"))
-    fees_pendentes = to_float(p.get("position_pubkey"))  # Lê as fees a recolher guardadas no Supabase
+    
+    # Fees Sacadas/Resgatadas
+    v_fees_sacadas = to_float(p.get("fees"))
+    
+    # Fees Por Recolher
+    v_fees_por_recolher = to_float(p.get("position_pubkey"))
+    
     data_ent = p.get("data_entrada", "")
     hrs_inativa = to_float(p.get("horas_inativa"))
-    
     estado = normalizar_estado(p.get("estado"))
 
-    v_fees_totais = v_fees_reg + fees_pendentes
+    v_fees_totais_pool = v_fees_sacadas + v_fees_por_recolher
+    v_atual_final = v_at if v_at > 0 else v_inv
 
-    if estado == "Fechada":
-        v_atual_final = v_at
-    else:
-        v_atual_final = v_at if v_at > 0 else v_inv
-
-    pnl_pool = (v_atual_final + v_fees_totais) - v_inv
+    pnl_pool = (v_atual_final + v_fees_totais_pool) - v_inv
     roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
 
     dias_corridos, dias_ativos = calcular_dias_metricas(data_ent, hrs_inativa)
     
-    fees_dia_corrido = v_fees_totais / dias_corridos
-    apr_corrido = ((v_fees_totais / v_inv) / dias_corridos * 365 * 100) if v_inv > 0 else 0.0
+    fees_dia_corrido = v_fees_totais_pool / dias_corridos
+    apr_corrido = ((v_fees_totais_pool / v_inv) / dias_corridos * 365 * 100) if v_inv > 0 else 0.0
 
-    fees_dia_ativo = v_fees_totais / dias_ativos
-    apr_ativo = ((v_fees_totais / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
+    fees_dia_ativo = v_fees_totais_pool / dias_ativos
+    apr_ativo = ((v_fees_totais_pool / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
 
-    if estado != "Fechada":
-        total_investido += v_inv
-        total_valor_atual += v_atual_final
-        total_fees += v_fees_totais
-        total_fees_diarias_corridas += fees_dia_corrido
-        total_fees_diarias_ativas += fees_dia_ativo
+    total_investido += v_inv
+    total_valor_atual += v_atual_final
+    total_fees_sacadas += v_fees_sacadas
+    total_fees_por_recolher += v_fees_por_recolher
+    total_fees += v_fees_totais_pool
+    total_fees_diarias_corridas += fees_dia_corrido
+    total_fees_diarias_ativas += fees_dia_ativo
 
     if estado == "Ativa":
         total_ativas += 1
-    elif estado == "Inativa":
+    else:
         total_inativas += 1
-    elif estado == "Fechada":
-        total_fechadas += 1
 
     p_item = p.copy()
     p_item["estado"] = estado
     p_item["v_inicial_calc"] = v_inv
     p_item["v_atual_calc"] = v_atual_final
-    p_item["fees_reg_calc"] = v_fees_reg
-    p_item["fees_calc"] = v_fees_totais
-    p_item["fees_pendentes_calc"] = fees_pendentes
+    p_item["fees_sacadas_calc"] = v_fees_sacadas
+    p_item["fees_por_recolher_calc"] = v_fees_por_recolher
+    p_item["fees_calc"] = v_fees_totais_pool
     p_item["pnl_pool"] = pnl_pool
     p_item["roi_pool"] = roi_pool
     p_item["dias_corridos"] = dias_corridos
@@ -425,9 +411,9 @@ if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
         f"📊 <b>PORTFÓLIO DEFI</b>\n\n"
         f"💰 <b>Investido:</b> ${total_investido:,.2f}\n"
         f"💵 <b>Atual:</b> ${total_valor_atual:,.2f}\n"
-        f"💸 <b>Fees Totais:</b> ${total_fees:,.2f}\n"
+        f"💸 <b>Fees Totais:</b> ${total_fees:,.2f} (${total_fees_sacadas:,.2f} sacadas)\n"
         f"📈 <b>PnL:</b> ${pnl_global:,.2f} ({roi_global:.2f}%)\n"
-        f"📌 <b>Ativas:</b> 🟢 {total_ativas} | 🔴 {total_inativas} | 📁 {total_fechadas}"
+        f"📌 <b>Ativas:</b> 🟢 {total_ativas} | 🔴 {total_inativas}"
     )
     if send_telegram(msg_resumo):
         st.sidebar.success("Enviado!")
@@ -440,34 +426,31 @@ st.title("⚡ Liquidity Hub Pro")
 k1, k2, k3 = st.columns(3)
 k1.metric("Investimento Ativo", f"${total_investido:,.2f}")
 k2.metric("Valor em Pools", f"${total_valor_atual:,.2f}")
-k3.metric("Fees Totais 💸", f"${total_fees:,.2f}")
+k3.metric("Fees Totais 💸", f"${total_fees:,.2f}", delta=f"${total_fees_sacadas:,.2f} sacadas")
 
 k4, k5, k6 = st.columns(3)
 k4.metric("Fees / Dia (Corrido)", f"${total_fees_diarias_corridas:,.2f}/d")
 k5.metric("PnL Total (+Fees)", f"${pnl_global:,.2f}", delta=f"{roi_global:.2f}%")
-k6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas} | 📁 {total_fechadas}")
+k6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO
+# 7. POSIÇÕES EM MONITORIZAÇÃO (COM BOTÃO RÁPIDO DE SAQUE)
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
 pools_filtradas = pools_processadas
-if filtro_estado == "Apenas Abertas (Ativas/Fora)":
-    pools_filtradas = [p for p in pools_processadas if p.get("estado") != "Fechada"]
-elif filtro_estado == "Ativas 🟢":
+if filtro_estado == "Ativas 🟢":
     pools_filtradas = [p for p in pools_processadas if p.get("estado") == "Ativa"]
 elif filtro_estado == "Fora de Range 🔴":
     pools_filtradas = [p for p in pools_processadas if p.get("estado") == "Inativa"]
-elif filtro_estado == "Fechadas 📁":
-    pools_filtradas = [p for p in pools_processadas if p.get("estado") == "Fechada"]
 
 if not pools_filtradas:
     st.info("Nenhuma piscina encontrada com o filtro selecionado.")
 else:
     for p in pools_filtradas:
+        pool_id = p["id"]
         par = p.get("par", "Par N/A")
         estado = p.get("estado", "Ativa")
         p_nat = to_float(p.get("preco_nativo"))
@@ -476,9 +459,9 @@ else:
         r_max = to_float(p.get("range_max"))
         v_inv = p["v_inicial_calc"]
         v_at = p["v_atual_calc"]
-        v_fees_reg = p["fees_reg_calc"]
+        v_fees_sacadas = p["fees_sacadas_calc"]
+        v_fees_por_recolher = p["fees_por_recolher_calc"]
         v_fees_totais = p["fees_calc"]
-        v_fees_pend = p["fees_pendentes_calc"]
         pnl_pool = p["pnl_pool"]
         roi_pool = p["roi_pool"]
         
@@ -486,11 +469,8 @@ else:
         dias_ativos = p["dias_ativos"]
         fees_dia_corrido = p["fees_dia_corrido"]
         apr_corrido = p["apr_corrido"]
-        fees_dia_ativo = p["fees_dia_ativo"]
-        apr_ativo = p["apr_ativo"]
         
         hrs_inativa = to_float(p.get("horas_inativa"))
-        addr = p.get("wallet_address", "")
 
         tipo_desvio = "EM RANGE"
         if r_max > 0 and p_nat > r_max:
@@ -503,12 +483,9 @@ else:
         if estado == "Ativa":
             badge_html = '<span class="badge-active">🟢 EM RANGE</span>'
             card_class = "pool-card pool-card-active"
-        elif estado == "Inativa":
+        else:
             badge_html = f'<span class="badge-inactive">🔴 FORA ({tipo_desvio} | {hrs_inativa:.1f}h)</span>'
             card_class = "pool-card pool-card-inactive"
-        else:
-            badge_html = '<span class="badge-closed">📁 FECHADA</span>'
-            card_class = "pool-card pool-card-closed"
 
         with st.container():
             st.markdown(f"""
@@ -525,21 +502,36 @@ else:
                 c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
                 c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
-                
-                if v_fees_pend > 0:
-                    c_p4.metric("Fees Registadas", f"${v_fees_reg:,.2f}", delta=f"+${v_fees_pend:,.2f} por recolher ⚡")
-                else:
-                    c_p4.metric("Fees Totais", f"${v_fees_totais:,.2f}")
+                c_p4.metric("Fees Totais", f"${v_fees_totais:,.2f}", delta=f"${v_fees_sacadas:,.2f} já sacadas")
 
-                if estado != "Fechada":
-                    render_sparkline_chart(p_nat, r_min, r_max)
+                render_sparkline_chart(p_nat, r_min, r_max)
 
                 c_p5, c_p6, c_p7, c_p8 = st.columns(4)
-                c_p5.metric("Dia Corrido", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
-                c_p6.metric("Dia Efetivo", f"${fees_dia_ativo:,.2f}/d", delta=f"{apr_ativo:.1f}% APR")
-                c_p7.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
-                
-                c_p8.markdown(f"<br>⚡ <b>Fees por Recolher:</b> <span style='color:#10b981; font-weight:bold;'>${v_fees_pend:,.2f}</span>", unsafe_allow_html=True)
+                c_p5.metric("Fees Sacadas", f"${v_fees_sacadas:,.2f}")
+                c_p6.metric("Fees Por Recolher", f"${v_fees_por_recolher:,.2f}")
+                c_p7.metric("Rendimento Diário", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
+                c_p8.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
+
+                # MÓDULO RÁPIDO DE REGISTO DE SAQUE DIÁRIO
+                with st.expander(f"💸 Registo Rápido de Saque — {par}"):
+                    col_saque_val, col_saque_btn = st.columns([3, 1])
+                    val_saque_hoje = col_saque_val.number_input(
+                        "Valor das fees sacadas hoje ($ USD):", 
+                        min_value=0.0, 
+                        step=1.0, 
+                        key=f"input_saque_{pool_id}"
+                    )
+                    if col_saque_btn.button("⚡ Registar Saque", key=f"btn_saque_{pool_id}", use_container_width=True):
+                        if val_saque_hoje > 0:
+                            novas_fees_sacadas = v_fees_sacadas + val_saque_hoje
+                            patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+                            res = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
+                            if res.status_code in [200, 204]:
+                                st.success(f"Adicionados +${val_saque_hoje:,.2f} em fees sacadas de {par}!")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("Erro ao atualizar o Supabase.")
 
             st.markdown("---")
 
@@ -550,9 +542,8 @@ st.subheader("📊 Análise do Portfólio")
 col_g1, col_g2 = st.columns(2)
 
 with col_g1:
-    pools_abertas = [p for p in pools_processadas if p.get("estado") != "Fechada"]
-    if pools_abertas:
-        df_pie = pd.DataFrame(pools_abertas)
+    if pools_processadas:
+        df_pie = pd.DataFrame(pools_processadas)
         fig_pie = px.pie(
             df_pie, 
             names="par", 
@@ -587,8 +578,8 @@ st.markdown("---")
 st.subheader("🛠️ Ferramentas & Gestão")
 
 tab_add, tab_edit, tab_calc, tab_table, tab_llama = st.tabs([
-    "➕ Adicionar", 
-    "✏ Editar / Fechar", 
+    "➕ Adicionar Pool", 
+    "✏ Editar Posição", 
     "🧮 Calculadora & IL", 
     "📄 Tabela Geral",
     "🔥 DefiLlama Yields"
@@ -604,11 +595,11 @@ with tab_add:
         c4, c5, c6 = st.columns(3)
         rmin_in = c4.number_input("Range Mínimo", min_value=0.0, format="%.8f")
         rmax_in = c5.number_input("Range Máximo", min_value=0.0, format="%.8f")
-        v_atual_in = c6.number_input("Valor Atual ($ USD)", min_value=0.0, step=10.0)
+        v_atual_in = c6.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
         
         c7, c8, c9 = st.columns(3)
-        fees_in = c7.number_input("Fees Já Resgatadas ($ USD)", min_value=0.0, step=1.0)
-        fees_pend_in = c8.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
+        fees_sacadas_in = c7.number_input("Fees Já Sacadas / Resgatadas ($ USD)", min_value=0.0, step=1.0)
+        fees_por_recolher_in = c8.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
         data_ent_in = c9.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
 
         btn_save = st.form_submit_button("Salvar Nova Pool")
@@ -623,41 +614,36 @@ with tab_add:
                     "wallet_address": addr_in,
                     "valor_inicial": invest_in,
                     "valor_atual": v_atual_in if v_atual_in > 0 else invest_in,
-                    "fees": fees_in,
+                    "fees": fees_sacadas_in,
+                    "position_pubkey": str(fees_por_recolher_in),
                     "data_entrada": data_ent_in,
                     "range_min": rmin_in,
                     "range_max": rmax_in,
                     "preco_nativo": p_nat or 0,
                     "preco_atual": p_usd or 0,
                     "estado": "Ativa",
-                    "horas_inativa": 0.0,
-                    "position_pubkey": str(fees_pend_in)
+                    "horas_inativa": 0.0
                 }
                 res = requests.post(f"{SUPABASE_URL}/rest/v1/pools", headers=headers, json=payload)
                 if res.status_code in [200, 201]:
-                    st.success("Pool adicionada!")
+                    st.success("Pool adicionada com sucesso!")
                     st.rerun()
 
 with tab_edit:
     if not pools:
         st.info("Não existem pools para editar.")
     else:
-        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')} [{normalizar_estado(p.get('estado'))}]": p for p in pools}
-        escolha = st.selectbox("Selecione a Pool:", list(lista_opcoes.keys()))
+        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')}": p for p in pools}
+        escolha = st.selectbox("Selecione a Pool a Editar:", list(lista_opcoes.keys()))
         pool_sel = lista_opcoes[escolha]
         
         with st.form("form_edit_pool"):
             st.markdown(f"**Editar Posição ID {pool_sel['id']} ({pool_sel.get('par')})**")
-            
-            estado_opcoes = ["Ativa", "Inativa", "Fechada"]
-            estado_atual = normalizar_estado(pool_sel.get("estado"))
-            estado_atual_idx = estado_opcoes.index(estado_atual) if estado_atual in estado_opcoes else 0
-            e_estado = st.selectbox("Estado da Pool:", estado_opcoes, index=estado_atual_idx)
 
             e1, e2, e3 = st.columns(3)
-            e_val_atual = e1.number_input("Valor Atual ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
-            e_fees = e2.number_input("Fees Já Resgatadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
-            e_fees_pend = e3.number_input("Fees Por Recolher ($)", value=to_float(pool_sel.get("position_pubkey")), step=1.0)
+            e_val_atual = e1.number_input("Valor Atual Posição ($ USD)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
+            e_fees_sacadas = e2.number_input("Fees Já Sacadas / Resgatadas ($ USD)", value=to_float(pool_sel.get("fees")), step=1.0)
+            e_fees_por_recolher = e3.number_input("Fees Por Recolher ($ USD)", value=to_float(pool_sel.get("position_pubkey")), step=1.0)
 
             e4, e5, e6 = st.columns(3)
             e_rmin = e4.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
@@ -669,45 +655,28 @@ with tab_edit:
             if btn_update:
                 patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
                 update_payload = {
-                    "estado": e_estado,
                     "valor_atual": e_val_atual,
-                    "fees": e_fees,
+                    "fees": e_fees_sacadas,
+                    "position_pubkey": str(e_fees_por_recolher),
                     "data_entrada": e_data_ent,
                     "range_min": e_rmin,
-                    "range_max": e_rmax,
-                    "position_pubkey": str(e_fees_pend)
+                    "range_max": e_rmax
                 }
                 res = requests.patch(patch_url, headers=headers, json=update_payload)
                 if res.status_code in [200, 204]:
-                    st.success("Atualizado com sucesso!")
+                    st.success("Alterações guardadas!")
                     st.rerun()
                 else:
                     st.error(f"Erro ao guardar: {res.text}")
 
         st.markdown("---")
-        
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            st.markdown("#### 🔒 Encerrar Rápido (Marcar Fechada)")
-            st.caption("Muda o estado diretamente para 'Fechada' no Supabase.")
-            if st.button(f"🔒 Marcar {pool_sel.get('par')} como Fechada", use_container_width=True):
-                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
-                res = requests.patch(patch_url, headers=headers, json={"estado": "Fechada"})
-                if res.status_code in [200, 204]:
-                    st.success(f"Pool {pool_sel.get('par')} marcada como Fechada!")
-                    st.rerun()
-                else:
-                    st.error(f"Erro Supabase ({res.status_code}): {res.text}")
-
-        with col_f2:
-            st.markdown("#### 🚨 Eliminar Definitivamente")
-            st.caption("Remove permanentemente esta posição da base de dados Supabase.")
-            if st.button(f"🗑️ Eliminar Permanente ID {pool_sel['id']}", type="primary", use_container_width=True):
-                del_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
-                del_res = requests.delete(del_url, headers=headers)
-                if del_res.status_code in [200, 204]:
-                    st.success("Pool eliminada!")
-                    st.rerun()
+        st.markdown("#### 🚨 Eliminar Posição")
+        if st.button(f"🗑️ Eliminar Permanente ID {pool_sel['id']}", type="primary", use_container_width=True):
+            del_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+            del_res = requests.delete(del_url, headers=headers)
+            if del_res.status_code in [200, 204]:
+                st.success("Pool eliminada!")
+                st.rerun()
 
 with tab_calc:
     col_c1, col_c2 = st.columns(2)
@@ -737,31 +706,24 @@ with tab_table:
         cols_display = {
             "id": "ID",
             "par": "Par",
-            "wallet_address": "Morada da Pool (Pair Address)",
             "estado": "Estado",
             "v_inicial_calc": "Investido ($)",
-            "v_atual_calc": "Valor Final ($)",
+            "v_atual_calc": "Valor Atual ($)",
+            "fees_sacadas_calc": "Fees Sacadas ($)",
+            "fees_por_recolher_calc": "Fees Por Recolher ($)",
             "fees_calc": "Fees Totais ($)",
-            "fees_pendentes_calc": "Fees Por Recolher ($)",
             "pnl_pool": "Ganhos / Perdas ($ USD)",
             "roi_pool": "ROI (%)",
-            "data_entrada": "Data Entrada",
-            "dias_corridos": "Dias Corridos"
+            "data_entrada": "Data Entrada"
         }
         
         existing_cols = [c for c in cols_display.keys() if c in df_table.columns]
         df_display = df_table[existing_cols].rename(columns=cols_display)
         
-        if "Ganhos / Perdas ($ USD)" in df_display.columns:
-            df_display["Ganhos / Perdas ($ USD)"] = df_display["Ganhos / Perdas ($ USD)"].apply(lambda x: f"${x:,.2f}")
-        if "Investido ($)" in df_display.columns:
-            df_display["Investido ($)"] = df_display["Investido ($)"].apply(lambda x: f"${x:,.2f}")
-        if "Valor Final ($)" in df_display.columns:
-            df_display["Valor Final ($)"] = df_display["Valor Final ($)"].apply(lambda x: f"${x:,.2f}")
-        if "Fees Totais ($)" in df_display.columns:
-            df_display["Fees Totais ($)"] = df_display["Fees Totais ($)"].apply(lambda x: f"${x:,.2f}")
-        if "Fees Por Recolher ($)" in df_display.columns:
-            df_display["Fees Por Recolher ($)"] = df_display["Fees Por Recolher ($)"].apply(lambda x: f"${x:,.2f}")
+        for col in ["Investido ($)", "Valor Atual ($)", "Fees Sacadas ($)", "Fees Por Recolher ($)", "Fees Totais ($)", "Ganhos / Perdas ($ USD)"]:
+            if col in df_display.columns:
+                df_display[col] = df_display[col].apply(lambda x: f"${x:,.2f}")
+        
         if "ROI (%)" in df_display.columns:
             df_display["ROI (%)"] = df_display["ROI (%)"].apply(lambda x: f"{x:.2f}%")
 
@@ -770,33 +732,23 @@ with tab_table:
     else:
         st.info("Nenhuma posição registada na base de dados.")
 
-# TAB 5: Oportunidades DeFiLlama
 with tab_llama:
     st.markdown("#### 🦙 Maiores Rendimentos DeFi em Tempo Real (DefiLlama)")
-    st.caption("Dados consultados diretamente via API pública do DefiLlama com atualização horária.")
-    
     data_llama = fetch_defillama_yields()
     
     if not data_llama:
         st.warning("Não foi possível carregar os dados do DefiLlama de momento.")
     else:
         df_llama = pd.DataFrame(data_llama)
-        
         col_f1, col_f2, col_f3 = st.columns(3)
         
         chains_disponiveis = sorted(df_llama["chain"].dropna().unique().tolist())
         default_chains = [c for c in ["Solana", "Ethereum", "Arbitrum"] if c in chains_disponiveis]
         chain_sel = col_f1.multiselect("Filtrar por Rede (Chain):", chains_disponiveis, default=default_chains)
-        
         tvl_min = col_f2.number_input("TVL Mínimo ($ USD):", min_value=10000, value=100000, step=50000)
-        
         ordem_sel = col_f3.selectbox("Ordenar por:", ["APY Total (apy)", "APY Base / Fees (apyBase)", "TVL ($)"])
 
-        if chain_sel:
-            df_filtered = df_llama[df_llama["chain"].isin(chain_sel)]
-        else:
-            df_filtered = df_llama
-
+        df_filtered = df_llama[df_llama["chain"].isin(chain_sel)] if chain_sel else df_llama
         df_filtered = df_filtered[df_filtered["tvlUsd"] >= tvl_min]
 
         sort_col = "apy"
@@ -806,49 +758,27 @@ with tab_llama:
             sort_col = "tvlUsd"
 
         df_filtered = df_filtered.sort_values(by=sort_col, ascending=False).head(50)
-
-        df_filtered["pool_address"] = df_filtered["pool"].astype(str)
         
-        df_filtered["link_llama"] = df_filtered.apply(
-            lambda r: f"https://defillama.com/yields/pool/{r['pool']}", axis=1
-        )
+        df_filtered["link_llama"] = df_filtered.apply(lambda r: f"https://defillama.com/yields/pool/{r['pool']}", axis=1)
         
-        df_filtered["link_dexscreener"] = df_filtered.apply(
-            lambda r: f"https://dexscreener.com/search?q={r.get('chain', '')}%20{r.get('project', '')}%20{r.get('symbol', '')}".replace(" ", "%20"), axis=1
-        )
-
-        df_filtered["link_gecko"] = df_filtered.apply(
-            lambda r: f"https://www.geckoterminal.com/search?q={r.get('symbol', '')}%20{r.get('project', '')}".replace(" ", "%20"), axis=1
-        )
-
         cols_map = {
             "symbol": "Par / Símbolo",
             "project": "Protocolo",
             "chain": "Rede",
-            "pool_address": "ID DefiLlama",
             "tvlUsd": "TVL ($)",
             "apy": "APY Total (%)",
-            "apyBase": "APY Base Fees (%)",
-            "apyReward": "APY Rewards (%)",
-            "link_llama": "DefiLlama",
-            "link_dexscreener": "DexScreener",
-            "link_gecko": "GeckoTerminal"
+            "link_llama": "DefiLlama"
         }
         
         df_show = df_filtered[list(cols_map.keys())].rename(columns=cols_map)
-        
         df_show["TVL ($)"] = df_show["TVL ($)"].apply(lambda x: f"${x:,.0f}")
         df_show["APY Total (%)"] = df_show["APY Total (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
-        df_show["APY Base Fees (%)"] = df_show["APY Base Fees (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
-        df_show["APY Rewards (%)"] = df_show["APY Rewards (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
 
         st.dataframe(
             df_show, 
             use_container_width=True, 
             hide_index=True,
             column_config={
-                "DefiLlama": st.column_config.LinkColumn("DefiLlama", display_text="🦙 Ver Pool"),
-                "DexScreener": st.column_config.LinkColumn("DexScreener", display_text="🔍 DexScreener"),
-                "GeckoTerminal": st.column_config.LinkColumn("GeckoTerminal", display_text="🦎 GeckoTerminal")
+                "DefiLlama": st.column_config.LinkColumn("DefiLlama", display_text="🦙 Ver Pool")
             }
         )
