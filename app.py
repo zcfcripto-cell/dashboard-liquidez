@@ -240,11 +240,31 @@ def calcular_dias_metricas(data_str, horas_inativa):
     except Exception:
         return 1.0, 1.0
 
-def calcular_il(razao_preco):
-    if razao_preco <= 0:
+# -----------------------------------------------------------------------------
+# CÁLCULO DE IL PARA 2 ATIVOS VOLÁTEIS E DIAS PARA NEUTRALIZAR
+# -----------------------------------------------------------------------------
+def calcular_il_duplo_ativo(p_a_ini, p_a_atual, p_b_ini, p_b_atual):
+    pa_i = to_float(p_a_ini)
+    pa_a = to_float(p_a_atual)
+    pb_i = to_float(p_b_ini, 1.0)
+    pb_a = to_float(p_b_atual, 1.0)
+
+    if pa_i <= 0 or pa_a <= 0 or pb_i <= 0 or pb_a <= 0:
         return 0.0
-    il = (2 * math.sqrt(razao_preco) / (1 + razao_preco)) - 1
-    return il * 100
+
+    ratio_a = pa_a / pa_i
+    ratio_b = pb_a / pb_i
+
+    # Razão relativa entre os dois tokens
+    ratio_relativo = ratio_a / ratio_b
+
+    il_pct = (2 * math.sqrt(ratio_relativo) / (1 + ratio_relativo) - 1) * 100
+    return il_pct
+
+def calcular_dias_para_anular_il(il_usd, fees_dia_media):
+    if fees_dia_media <= 0 or il_usd <= 0:
+        return 0.0
+    return il_usd / fees_dia_media
 
 # -----------------------------------------------------------------------------
 # 4. BARRA LATERAL & OPÇÕES
@@ -276,11 +296,11 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
                     if r_max > 0 and p_nat > r_max:
                         in_range = False
                         pct = ((p_nat - r_max) / r_max) * 100
-                        desvio_txt = f"+{pct:.2f}% máx"
+                        desvio_txt = f"+{pct:.2f}% (Acima do Máximo)"
                     elif r_min > 0 and p_nat < r_min:
                         in_range = False
                         pct = ((r_min - p_nat) / r_min) * 100
-                        desvio_txt = f"-{pct:.2f}% mín"
+                        desvio_txt = f"-{pct:.2f}% (Abaixo do Mínimo)"
                     
                     novo_estado = "Ativa" if in_range else "Inativa"
                     last_update = to_float(p.get("last_price_update"))
@@ -316,7 +336,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO (SOMA DE FEES SACADAS + PENDENTES)
+# 5. CÁLCULO DE MÉTRICAS COMPLETO (SOMA FEES + IL DUPLO ATIVO + DIAS DE COBERTURA)
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
@@ -333,16 +353,26 @@ pools_processadas = []
 for p in pools:
     v_inv = to_float(p.get("valor_inicial"))
     v_at = to_float(p.get("valor_atual"))
-    
-    # Fees Sacadas/Resgatadas
     v_fees_sacadas = to_float(p.get("fees"))
-    
-    # Fees Por Recolher
     v_fees_por_recolher = to_float(p.get("position_pubkey"))
-    
     data_ent = p.get("data_entrada", "")
     hrs_inativa = to_float(p.get("horas_inativa"))
     estado = normalizar_estado(p.get("estado"))
+
+    # Preços para Cálculo de IL Duplo Ativo
+    p_a_ini = to_float(p.get("preco_inicial"))      # Preço Token A Inicial
+    p_a_atual = to_float(p.get("preco_nativo"))      # Preço Token A Atual
+    p_b_ini = to_float(p.get("last_price_update"))   # Preço Token B Inicial (guardado no campo)
+    p_b_atual = to_float(p.get("preco_atual"), 1.0)  # Preço Token B Atual
+
+    # Se p_b_ini não estiver definido, assume 1.0 (Token B é Stablecoin)
+    if p_b_ini <= 0:
+        p_b_ini = 1.0
+
+    il_pct = calcular_il_duplo_ativo(p_a_ini, p_a_atual, p_b_ini, p_b_atual)
+    
+    # IL em valor monetário USD
+    il_usd = abs(il_pct / 100.0) * v_inv
 
     v_fees_totais_pool = v_fees_sacadas + v_fees_por_recolher
     v_atual_final = v_at if v_at > 0 else v_inv
@@ -357,6 +387,9 @@ for p in pools:
 
     fees_dia_ativo = v_fees_totais_pool / dias_ativos
     apr_ativo = ((v_fees_totais_pool / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
+
+    # Dias necessários de fees para eliminar a Perda Impermanente
+    dias_para_cobertura = calcular_dias_para_anular_il(il_usd, fees_dia_corrido)
 
     total_investido += v_inv
     total_valor_atual += v_atual_final
@@ -378,6 +411,9 @@ for p in pools:
     p_item["fees_sacadas_calc"] = v_fees_sacadas
     p_item["fees_por_recolher_calc"] = v_fees_por_recolher
     p_item["fees_calc"] = v_fees_totais_pool
+    p_item["il_pct_calc"] = il_pct
+    p_item["il_usd_calc"] = il_usd
+    p_item["dias_cobertura_calc"] = dias_para_cobertura
     p_item["pnl_pool"] = pnl_pool
     p_item["roi_pool"] = roi_pool
     p_item["dias_corridos"] = dias_corridos
@@ -436,7 +472,7 @@ k6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (COM BOTÃO RÁPIDO DE SAQUE E LIMPEZA DE CAMPO)
+# 7. POSIÇÕES EM MONITORIZAÇÃO
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -462,6 +498,11 @@ else:
         v_fees_sacadas = p["fees_sacadas_calc"]
         v_fees_por_recolher = p["fees_por_recolher_calc"]
         v_fees_totais = p["fees_calc"]
+        
+        il_pct = p["il_pct_calc"]
+        il_usd = p["il_usd_calc"]
+        dias_cobertura = p["dias_cobertura_calc"]
+
         pnl_pool = p["pnl_pool"]
         roi_pool = p["roi_pool"]
         
@@ -472,13 +513,17 @@ else:
         
         hrs_inativa = to_float(p.get("horas_inativa"))
 
+        # Verificação do Limite de Saída
         tipo_desvio = "EM RANGE"
+        motivo_saida = ""
         if r_max > 0 and p_nat > r_max:
             pct = ((p_nat - r_max) / r_max) * 100
-            tipo_desvio = f"+{pct:.2f}% máx"
+            tipo_desvio = f"+{pct:.2f}% (Acima)"
+            motivo_saida = "⚠️ Saída pelo limite SUPERIOR: Posição convertida 100% no Token B."
         elif r_min > 0 and p_nat < r_min:
             pct = ((r_min - p_nat) / r_min) * 100
-            tipo_desvio = f"-{pct:.2f}% mín"
+            tipo_desvio = f"-{pct:.2f}% (Abaixo)"
+            motivo_saida = "⚠️ Saída pelo limite INFERIOR: Posição convertida 100% no Token A."
 
         if estado == "Ativa":
             badge_html = '<span class="badge-active">🟢 EM RANGE</span>'
@@ -502,7 +547,17 @@ else:
                 c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
                 c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
-                c_p4.metric("Fees Totais", f"${v_fees_totais:,.2f}", delta=f"${v_fees_sacadas:,.2f} já sacadas")
+                
+                # Perda Impermanente e tempo necessário para anular
+                c_p4.metric(
+                    "Perda Impermanente (IL)", 
+                    f"{il_pct:.2f}% (${il_usd:,.2f})", 
+                    delta=f"{dias_cobertura:.1f} dias p/ anular", 
+                    delta_color="inverse"
+                )
+
+                if motivo_saida and estado != "Ativa":
+                    st.caption(motivo_saida)
 
                 render_sparkline_chart(p_nat, r_min, r_max)
 
@@ -512,7 +567,7 @@ else:
                 c_p7.metric("Rendimento Diário", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
                 c_p8.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
 
-                # MÓDULO RÁPIDO DE REGISTO DE SAQUE DIÁRIO (COM AUTO-CLEAR)
+                # REGISTO RÁPIDO DE SAQUE DIÁRIO
                 with st.expander(f"💸 Registo Rápido de Saque — {par}"):
                     key_input = f"input_saque_{pool_id}"
                     if key_input not in st.session_state:
@@ -578,7 +633,7 @@ with col_g2:
         st.info("A aguardar histórico de PnL...")
 
 # -----------------------------------------------------------------------------
-# 9. FERRAMENTAS & GESTÃO
+# 9. FERRAMENTAS & GESTÃO DE POOLS
 # -----------------------------------------------------------------------------
 st.markdown("---")
 st.subheader("🛠️ Ferramentas & Gestão")
@@ -594,19 +649,23 @@ tab_add, tab_edit, tab_calc, tab_table, tab_llama = st.tabs([
 with tab_add:
     with st.form("form_add_pool"):
         c1, c2, c3 = st.columns(3)
-        par_in = c1.text_input("Par (ex: SOL/USDC)", "")
+        par_in = c1.text_input("Par (ex: SOL/BONK ou SOL/USDC)", "")
         addr_in = c2.text_input("Pair Address (DexScreener)", "")
         invest_in = c3.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
 
-        c4, c5, c6 = st.columns(3)
-        rmin_in = c4.number_input("Range Mínimo", min_value=0.0, format="%.8f")
-        rmax_in = c5.number_input("Range Máximo", min_value=0.0, format="%.8f")
-        v_atual_in = c6.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
+        c4, c5 = st.columns(2)
+        p_a_inicial_in = c4.number_input("Preço Inicial Token A ($ USD)", min_value=0.0, format="%.8f")
+        p_b_inicial_in = c5.number_input("Preço Inicial Token B ($ USD - 1.0 se Stablecoin)", min_value=0.0, value=1.0, format="%.8f")
+
+        c6, c7, c8 = st.columns(3)
+        rmin_in = c6.number_input("Range Mínimo", min_value=0.0, format="%.8f")
+        rmax_in = c7.number_input("Range Máximo", min_value=0.0, format="%.8f")
+        v_atual_in = c8.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
         
-        c7, c8, c9 = st.columns(3)
-        fees_sacadas_in = c7.number_input("Fees Já Sacadas / Resgatadas ($ USD)", min_value=0.0, step=1.0)
-        fees_por_recolher_in = c8.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
-        data_ent_in = c9.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
+        c9, c10, c11 = st.columns(3)
+        fees_sacadas_in = c9.number_input("Fees Já Sacadas ($ USD)", min_value=0.0, step=1.0)
+        fees_por_recolher_in = c10.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
+        data_ent_in = c11.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
 
         btn_save = st.form_submit_button("Salvar Nova Pool")
 
@@ -623,6 +682,8 @@ with tab_add:
                     "fees": fees_sacadas_in,
                     "position_pubkey": str(fees_por_recolher_in),
                     "data_entrada": data_ent_in,
+                    "preco_inicial": p_a_inicial_in if p_a_inicial_in > 0 else (p_nat or 0),
+                    "last_price_update": p_b_inicial_in, # Guarda Preço Inicial Token B
                     "range_min": rmin_in,
                     "range_max": rmax_in,
                     "preco_nativo": p_nat or 0,
@@ -647,14 +708,18 @@ with tab_edit:
             st.markdown(f"**Editar Posição ID {pool_sel['id']} ({pool_sel.get('par')})**")
 
             e1, e2, e3 = st.columns(3)
-            e_val_atual = e1.number_input("Valor Atual Posição ($ USD)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
-            e_fees_sacadas = e2.number_input("Fees Já Sacadas / Resgatadas ($ USD)", value=to_float(pool_sel.get("fees")), step=1.0)
-            e_fees_por_recolher = e3.number_input("Fees Por Recolher ($ USD)", value=to_float(pool_sel.get("position_pubkey")), step=1.0)
+            e_val_atual = e1.number_input("Valor Atual Posição ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
+            e_pa_inicial = e2.number_input("Preço Inicial Token A ($ USD)", value=to_float(pool_sel.get("preco_inicial")), format="%.8f")
+            e_pb_inicial = e3.number_input("Preço Inicial Token B ($ USD)", value=to_float(pool_sel.get("last_price_update"), 1.0), format="%.8f")
 
             e4, e5, e6 = st.columns(3)
-            e_rmin = e4.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
-            e_rmax = e5.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
+            e_fees_sacadas = e4.number_input("Fees Já Sacadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
+            e_fees_por_recolher = e5.number_input("Fees Por Recolher ($)", value=to_float(pool_sel.get("position_pubkey")), step=1.0)
             e_data_ent = e6.text_input("Data Entrada", value=str(pool_sel.get("data_entrada", "")))
+
+            e7, e8 = st.columns(2)
+            e_rmin = e7.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
+            e_rmax = e8.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
 
             btn_update = st.form_submit_button("💾 Guardar Alterações")
 
@@ -662,6 +727,8 @@ with tab_edit:
                 patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
                 update_payload = {
                     "valor_atual": e_val_atual,
+                    "preco_inicial": e_pa_inicial,
+                    "last_price_update": e_pb_inicial,
                     "fees": e_fees_sacadas,
                     "position_pubkey": str(e_fees_por_recolher),
                     "data_entrada": e_data_ent,
@@ -699,11 +766,13 @@ with tab_calc:
             st.write(f"**Novo Range Máximo (+{var_pct}%):** `{format_crypto_price(novo_max)}`")
 
     with col_c2:
-        st.markdown("#### 📉 Simulador de IL")
-        var_preco_simulada = st.slider("Variação de Preço (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0, key="calc_il_slider")
-        razao = 1.0 + (var_preco_simulada / 100.0)
-        il_resultado = calcular_il(razao)
-        st.metric("IL Estimada", f"{il_resultado:.2f}%", delta=f"{il_resultado:.2f}%", delta_color="inverse")
+        st.markdown("#### 📉 Simulador de IL Duplo Ativo")
+        var_a = st.slider("Variação Token A (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0)
+        var_b = st.slider("Variação Token B (%)", min_value=-80.0, max_value=300.0, value=0.0, step=5.0)
+        
+        ratio_rel = (1.0 + var_a / 100.0) / (1.0 + var_b / 100.0)
+        il_simulada = (2 * math.sqrt(ratio_rel) / (1 + ratio_rel) - 1) * 100
+        st.metric("IL Estimada", f"{il_simulada:.2f}%", delta=f"{il_simulada:.2f}%", delta_color="inverse")
 
 with tab_table:
     if pools_processadas:
@@ -715,12 +784,13 @@ with tab_table:
             "estado": "Estado",
             "v_inicial_calc": "Investido ($)",
             "v_atual_calc": "Valor Atual ($)",
+            "il_pct_calc": "IL (%)",
+            "dias_cobertura_calc": "Dias P/ Anular IL",
             "fees_sacadas_calc": "Fees Sacadas ($)",
             "fees_por_recolher_calc": "Fees Por Recolher ($)",
             "fees_calc": "Fees Totais ($)",
             "pnl_pool": "Ganhos / Perdas ($ USD)",
-            "roi_pool": "ROI (%)",
-            "data_entrada": "Data Entrada"
+            "roi_pool": "ROI (%)"
         }
         
         existing_cols = [c for c in cols_display.keys() if c in df_table.columns]
@@ -730,6 +800,10 @@ with tab_table:
             if col in df_display.columns:
                 df_display[col] = df_display[col].apply(lambda x: f"${x:,.2f}")
         
+        if "IL (%)" in df_display.columns:
+            df_display["IL (%)"] = df_display["IL (%)"].apply(lambda x: f"{x:.2f}%")
+        if "Dias P/ Anular IL" in df_display.columns:
+            df_display["Dias P/ Anular IL"] = df_display["Dias P/ Anular IL"].apply(lambda x: f"{x:.1f} dias")
         if "ROI (%)" in df_display.columns:
             df_display["ROI (%)"] = df_display["ROI (%)"].apply(lambda x: f"{x:.2f}%")
 
