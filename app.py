@@ -241,18 +241,59 @@ def calcular_dias_metricas(data_str, horas_inativa):
         return 1.0, 1.0
 
 # -----------------------------------------------------------------------------
-# CÁLCULO DE IL PONDERADO PARA POOLS SIMÉTRICAS OU ASSIMÉTRICAS
+# CÁLCULO DE LIQUIDEZ CONCENTRADA (CLMM) E IL DINÂMICO
 # -----------------------------------------------------------------------------
-def calcular_il_ponderado(preco_nativo_inicial, preco_nativo_atual, peso_a=0.5):
-    p_ini = to_float(preco_nativo_inicial)
-    p_at = to_float(preco_nativo_atual)
-    wa = to_float(peso_a, 0.5)
+def calcular_peso_clmm(p_atual, r_min, r_max):
+    """Calcula o peso dinâmico do token A (wa) numa posição de gama concentrada."""
+    pa = to_float(p_atual)
+    rmin = to_float(r_min)
+    rmax = to_float(r_max)
+
+    # Se não houver range definido, assume 50/50 clássico
+    if rmin <= 0 or rmax <= 0 or rmin >= rmax:
+        return 0.5
+
+    if pa <= rmin:
+        return 1.0  # 100% Token A
+    if pa >= rmax:
+        return 0.0  # 100% Token B
+
+    try:
+        sqrt_p = math.sqrt(pa)
+        sqrt_min = math.sqrt(rmin)
+        sqrt_max = math.sqrt(rmax)
+
+        # Quantidade de Token A e Token B virtuais na gama concentrada
+        # L = Delta_y / (sqrt_p_upper - sqrt_p_lower)
+        # Token A amount proportional to (sqrt_max - sqrt_p) / (sqrt_p * sqrt_max)
+        numerator = (sqrt_max - sqrt_p) / (sqrt_p * sqrt_max)
+        denominator = (sqrt_max - sqrt_min) / (sqrt_min * sqrt_max)
+        
+        wa = numerator / denominator
+        return max(0.0, min(1.0, wa))
+    except Exception:
+        return 0.5
+
+def calcular_il_clmm(p_inicial, p_atual, r_min, r_max):
+    p_ini = to_float(p_inicial)
+    p_at = to_float(p_atual)
 
     if p_ini <= 0 or p_at <= 0:
         return 0.0
 
+    # Determinar o peso dinâmico com base no preço atual e no range
+    wa = calcular_peso_clmm(p_at, r_min, r_max)
     wb = 1.0 - wa
+
     ratio = p_at / p_ini
+
+    # Se estiver totalmente fora do range num dos lados
+    if wa == 1.0:
+        il_pct = (p_at / p_ini - 1) * 100 # Segue variação direta do ativo A
+        return il_pct
+    elif wa == 0.0:
+        il_pct = 0.0
+        return il_pct
 
     val_hodl = (wa * ratio) + wb
     val_lp = ratio ** wa
@@ -338,7 +379,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO
+# 5. CÁLCULO DE MÉTRICAS COMPLETO (COM CLMM DINÂMICO)
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
@@ -363,12 +404,11 @@ for p in pools:
 
     p_nat_atual = to_float(p.get("preco_nativo"))
     p_nat_inicial = to_float(p.get("preco_inicial"))
-    
-    peso_a = to_float(p.get("peso_a"), 0.5)
-    if peso_a <= 0:
-        peso_a = 0.5
+    r_min = to_float(p.get("range_min"))
+    r_max = to_float(p.get("range_max"))
 
-    il_pct = calcular_il_ponderado(p_nat_inicial, p_nat_atual, peso_a)
+    # Cálculo dinâmico de IL com base na Liquidez Concentrada (Range)
+    il_pct = calcular_il_clmm(p_nat_inicial, p_nat_atual, r_min, r_max)
     il_usd = abs(il_pct / 100.0) * v_inv
 
     v_fees_totais_pool = v_fees_sacadas + v_fees_por_recolher
@@ -656,19 +696,18 @@ with tab_add:
         addr_in = c2.text_input("Pair Address (DexScreener)", "")
         invest_in = c3.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
 
-        c4, c5, c6 = st.columns(3)
+        c4, c5 = st.columns(2)
         p_nat_inicial_in = c4.number_input("Preço Nativo Inicial", min_value=0.0, format="%.8f")
-        peso_a_in = c5.number_input("Peso do Token A (ex: 0.5 para 50/50)", min_value=0.01, max_value=0.99, value=0.50, format="%.2f")
-        v_atual_in = c6.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
+        v_atual_in = c5.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
 
-        c7, c8, c9 = st.columns(3)
-        rmin_in = c7.number_input("Range Mínimo", min_value=0.0, format="%.8f")
-        rmax_in = c8.number_input("Range Máximo", min_value=0.0, format="%.8f")
-        data_ent_in = c9.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
+        c6, c7, c8 = st.columns(3)
+        rmin_in = c6.number_input("Range Mínimo", min_value=0.0, format="%.8f")
+        rmax_in = c7.number_input("Range Máximo", min_value=0.0, format="%.8f")
+        data_ent_in = c8.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
         
-        c10, c11 = st.columns(2)
-        fees_sacadas_in = c10.number_input("Fees Já Sacadas ($ USD)", min_value=0.0, step=1.0)
-        fees_por_recolher_in = c11.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
+        c9, c10 = st.columns(2)
+        fees_sacadas_in = c9.number_input("Fees Já Sacadas ($ USD)", min_value=0.0, step=1.0)
+        fees_por_recolher_in = c10.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
 
         btn_save = st.form_submit_button("Salvar Nova Pool")
 
@@ -686,7 +725,6 @@ with tab_add:
                     "position_pubkey": str(fees_por_recolher_in),
                     "data_entrada": data_ent_in,
                     "preco_inicial": p_nat_inicial_in if p_nat_inicial_in > 0 else (p_nat or 0),
-                    "peso_a": peso_a_in,
                     "range_min": rmin_in,
                     "range_max": rmax_in,
                     "preco_nativo": p_nat or 0,
@@ -710,19 +748,18 @@ with tab_edit:
         with st.form("form_edit_pool"):
             st.markdown(f"**Editar Posição ID {pool_sel['id']} ({pool_sel.get('par')})**")
 
-            e1, e2, e3 = st.columns(3)
+            e1, e2 = st.columns(2)
             e_val_atual = e1.number_input("Valor Atual Posição ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
             e_pnat_inicial = e2.number_input("Preço Nativo Inicial", value=to_float(pool_sel.get("preco_inicial")), format="%.8f")
-            e_peso_a = e3.number_input("Peso do Token A (ex: 0.5)", value=to_float(pool_sel.get("peso_a"), 0.5), format="%.2f")
 
-            e4, e5, e6 = st.columns(3)
-            e_fees_sacadas = e4.number_input("Fees Já Sacadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
-            e_fees_por_recolher = e5.number_input("Fees Por Recolher ($)", value=to_float(pool_sel.get("position_pubkey")), step=1.0)
-            e_data_ent = e6.text_input("Data Entrada", value=str(pool_sel.get("data_entrada", "")))
+            e3, e4, e5 = st.columns(3)
+            e_fees_sacadas = e3.number_input("Fees Já Sacadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
+            e_fees_por_recolher = e4.number_input("Fees Por Recolher ($)", value=to_float(pool_sel.get("position_pubkey")), step=1.0)
+            e_data_ent = e5.text_input("Data Entrada", value=str(pool_sel.get("data_entrada", "")))
 
-            e7, e8 = st.columns(2)
-            e_rmin = e7.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
-            e_rmax = e8.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
+            e6, e7 = st.columns(2)
+            e_rmin = e6.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
+            e_rmax = e7.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
 
             btn_update = st.form_submit_button("💾 Guardar Alterações")
 
@@ -731,7 +768,6 @@ with tab_edit:
                 update_payload = {
                     "valor_atual": e_val_atual,
                     "preco_inicial": e_pnat_inicial,
-                    "peso_a": e_peso_a,
                     "fees": e_fees_sacadas,
                     "position_pubkey": str(e_fees_por_recolher),
                     "data_entrada": e_data_ent,
@@ -769,17 +805,26 @@ with tab_calc:
             st.write(f"**Novo Range Máximo (+{var_pct}%):** `{format_crypto_price(novo_max)}`")
 
     with col_c2:
-        st.markdown("#### 📉 Simulador de IL Ponderado")
+        st.markdown("#### 📉 Simulador de IL CLMM (Gama Concentrada)")
         var_preco_simulada = st.slider("Variação de Preço (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0, key="calc_il_slider")
-        peso_sim = st.slider("Peso do Token A (wa)", min_value=0.1, max_value=0.9, value=0.5, step=0.05, key="calc_peso_sim")
+        rmin_sim = st.number_input("Range Mínimo (Simulação)", value=0.000030, format="%.8f")
+        rmax_sim = st.number_input("Range Máximo (Simulação)", value=0.000080, format="%.8f")
+        p_atual_sim = 0.000050 * (1.0 + var_preco_simulada / 100.0)
+
+        wa_sim = calcular_peso_clmm(p_atual_sim, rmin_sim, rmax_sim)
+        wb_sim = 1.0 - wa_sim
+        razao_sim = 1.0 + (var_preco_simulada / 100.0)
         
-        razao = 1.0 + (var_preco_simulada / 100.0)
-        wb = 1.0 - peso_sim
-        v_h = (peso_sim * razao) + wb
-        v_l = razao ** peso_sim
-        il_resultado = ((v_l / v_h) - 1) * 100 if v_h > 0 else 0.0
-        
-        st.metric("IL Estimada", f"{il_resultado:.2f}%", delta=f"{il_resultado:.2f}%", delta_color="inverse")
+        if wa_sim == 1.0:
+            il_res = (razao_sim - 1) * 100
+        elif wa_sim == 0.0:
+            il_res = 0.0
+        else:
+            v_h = (wa_sim * razao_sim) + wb_sim
+            v_l = razao_sim ** wa_sim
+            il_res = ((v_l / v_h) - 1) * 100 if v_h > 0 else 0.0
+
+        st.metric("IL Estimada (CLMM)", f"{il_res:.2f}%", delta=f"Peso Token A: {wa_sim*100:.1f}%", delta_color="inverse")
 
 with tab_table:
     if pools_processadas:
