@@ -244,28 +244,23 @@ def calcular_dias_metricas(data_str, horas_inativa):
 # CÁLCULO DE LIQUIDEZ CONCENTRADA (CLMM) E IL DINÂMICO
 # -----------------------------------------------------------------------------
 def calcular_peso_clmm(p_atual, r_min, r_max):
-    """Calcula o peso dinâmico do token A (wa) numa posição de gama concentrada."""
     pa = to_float(p_atual)
     rmin = to_float(r_min)
     rmax = to_float(r_max)
 
-    # Se não houver range definido, assume 50/50 clássico
     if rmin <= 0 or rmax <= 0 or rmin >= rmax:
         return 0.5
 
     if pa <= rmin:
-        return 1.0  # 100% Token A
+        return 1.0
     if pa >= rmax:
-        return 0.0  # 100% Token B
+        return 0.0
 
     try:
         sqrt_p = math.sqrt(pa)
         sqrt_min = math.sqrt(rmin)
         sqrt_max = math.sqrt(rmax)
 
-        # Quantidade de Token A e Token B virtuais na gama concentrada
-        # L = Delta_y / (sqrt_p_upper - sqrt_p_lower)
-        # Token A amount proportional to (sqrt_max - sqrt_p) / (sqrt_p * sqrt_max)
         numerator = (sqrt_max - sqrt_p) / (sqrt_p * sqrt_max)
         denominator = (sqrt_max - sqrt_min) / (sqrt_min * sqrt_max)
         
@@ -281,19 +276,15 @@ def calcular_il_clmm(p_inicial, p_atual, r_min, r_max):
     if p_ini <= 0 or p_at <= 0:
         return 0.0
 
-    # Determinar o peso dinâmico com base no preço atual e no range
     wa = calcular_peso_clmm(p_at, r_min, r_max)
     wb = 1.0 - wa
 
     ratio = p_at / p_ini
 
-    # Se estiver totalmente fora do range num dos lados
     if wa == 1.0:
-        il_pct = (p_at / p_ini - 1) * 100 # Segue variação direta do ativo A
-        return il_pct
+        return (p_at / p_ini - 1) * 100
     elif wa == 0.0:
-        il_pct = 0.0
-        return il_pct
+        return 0.0
 
     val_hodl = (wa * ratio) + wb
     val_lp = ratio ** wa
@@ -379,7 +370,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO (COM CLMM DINÂMICO)
+# 5. CÁLCULO DE MÉTRICAS COMPLETO
 # -----------------------------------------------------------------------------
 total_investido = 0.0
 total_valor_atual = 0.0
@@ -407,7 +398,6 @@ for p in pools:
     r_min = to_float(p.get("range_min"))
     r_max = to_float(p.get("range_max"))
 
-    # Cálculo dinâmico de IL com base na Liquidez Concentrada (Range)
     il_pct = calcular_il_clmm(p_nat_inicial, p_nat_atual, r_min, r_max)
     il_usd = abs(il_pct / 100.0) * v_inv
 
@@ -516,7 +506,7 @@ pools_filtradas = pools_processadas
 if filtro_estado == "Ativas 🟢":
     pools_filtradas = [p for p in pools_processadas if p.get("estado") == "Ativa"]
 elif filtro_estado == "Fora de Range 🔴":
-    pools_filtradas = [p for p in pools_processadas if p.get("estado") == "Inativa"]
+    pools_filtradas = [p for p in pools_processadas if p.get("estado"] == "Inativa"]
 
 if not pools_filtradas:
     st.info("Nenhuma piscina encontrada com o filtro selecionado.")
@@ -602,25 +592,19 @@ else:
                 c_p8.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
 
                 with st.expander(f"💸 Registo Rápido de Saque — {par}"):
-                    key_input = f"input_saque_{pool_id}"
-                    if key_input not in st.session_state:
-                        st.session_state[key_input] = 0.0
-
-                    col_saque_val, col_saque_btn = st.columns([3, 1])
-                    val_saque_hoje = col_saque_val.number_input(
+                    val_saque_hoje = st.number_input(
                         "Valor das fees sacadas hoje ($ USD):", 
                         min_value=0.0, 
                         step=1.0, 
-                        key=key_input
+                        key=f"input_saque_{pool_id}"
                     )
                     
-                    if col_saque_btn.button("⚡ Registar Saque", key=f"btn_saque_{pool_id}", use_container_width=True):
+                    if st.button("⚡ Registar Saque", key=f"btn_saque_{pool_id}", use_container_width=True):
                         if val_saque_hoje > 0:
                             novas_fees_sacadas = v_fees_sacadas + val_saque_hoje
                             patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
                             res = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
                             if res.status_code in [200, 204]:
-                                st.session_state[key_input] = 0.0
                                 st.success(f"Adicionados +${val_saque_hoje:,.2f} em fees sacadas de {par}!")
                                 time.sleep(1)
                                 st.rerun()
