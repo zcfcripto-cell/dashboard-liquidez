@@ -436,7 +436,7 @@ k6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (COM BOTÃO RÁPIDO DE SAQUE)
+# 7. POSIÇÕES EM MONITORIZAÇÃO (COM BOTÃO RÁPIDO DE SAQUE E LIMPEZA DE CAMPO)
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -512,21 +512,27 @@ else:
                 c_p7.metric("Rendimento Diário", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
                 c_p8.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
 
-                # MÓDULO RÁPIDO DE REGISTO DE SAQUE DIÁRIO
+                # MÓDULO RÁPIDO DE REGISTO DE SAQUE DIÁRIO (COM AUTO-CLEAR)
                 with st.expander(f"💸 Registo Rápido de Saque — {par}"):
+                    key_input = f"input_saque_{pool_id}"
+                    if key_input not in st.session_state:
+                        st.session_state[key_input] = 0.0
+
                     col_saque_val, col_saque_btn = st.columns([3, 1])
                     val_saque_hoje = col_saque_val.number_input(
                         "Valor das fees sacadas hoje ($ USD):", 
                         min_value=0.0, 
                         step=1.0, 
-                        key=f"input_saque_{pool_id}"
+                        key=key_input
                     )
+                    
                     if col_saque_btn.button("⚡ Registar Saque", key=f"btn_saque_{pool_id}", use_container_width=True):
                         if val_saque_hoje > 0:
                             novas_fees_sacadas = v_fees_sacadas + val_saque_hoje
                             patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
                             res = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
                             if res.status_code in [200, 204]:
+                                st.session_state[key_input] = 0.0
                                 st.success(f"Adicionados +${val_saque_hoje:,.2f} em fees sacadas de {par}!")
                                 time.sleep(1)
                                 st.rerun()
