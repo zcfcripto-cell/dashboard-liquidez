@@ -484,4 +484,388 @@ else:
     for p in pools_filtradas:
         pool_id = p["id"]
         par = p.get("par", "Par N/A")
-        estado = p.get("
+        estado = p.get("estado", "Ativa")
+        p_nat = to_float(p.get("preco_nativo"))
+        p_usd = to_float(p.get("preco_atual"))
+        r_min = to_float(p.get("range_min"))
+        r_max = to_float(p.get("range_max"))
+        v_inv = p["v_inicial_calc"]
+        v_at = p["v_atual_calc"]
+        v_fees_sacadas = p["fees_sacadas_calc"]
+        v_fees_por_recolher = p["fees_por_recolher_calc"]
+        v_fees_totais = p["fees_calc"]
+        
+        il_pct = p["il_pct_calc"]
+        il_usd = p["il_usd_calc"]
+        dias_cobertura = p["dias_cobertura_calc"]
+
+        pnl_pool = p["pnl_pool"]
+        roi_pool = p["roi_pool"]
+        
+        dias_corridos = p["dias_corridos"]
+        dias_ativos = p["dias_ativos"]
+        fees_dia_corrido = p["fees_dia_corrido"]
+        apr_corrido = p["apr_corrido"]
+        
+        hrs_inativa = to_float(p.get("horas_inativa"))
+
+        tipo_desvio = "EM RANGE"
+        motivo_saida = ""
+        if r_max > 0 and p_nat > r_max:
+            pct = ((p_nat - r_max) / r_max) * 100
+            tipo_desvio = f"+{pct:.2f}% (Acima)"
+            motivo_saida = "⚠️ Saída pelo limite SUPERIOR."
+        elif r_min > 0 and p_nat < r_min:
+            pct = ((r_min - p_nat) / r_min) * 100
+            tipo_desvio = f"-{pct:.2f}% (Abaixo)"
+            motivo_saida = "⚠️ Saída pelo limite INFERIOR."
+
+        if estado == "Ativa":
+            badge_html = '<span class="badge-active">🟢 EM RANGE</span>'
+            card_class = "pool-card pool-card-active"
+        else:
+            badge_html = f'<span class="badge-inactive">🔴 FORA ({tipo_desvio} | {hrs_inativa:.1f}h)</span>'
+            card_class = "pool-card pool-card-inactive"
+
+        with st.container():
+            st.markdown(f"""
+            <div class="{card_class}">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin:0;">{par} <span style="font-size: 0.8rem; color: #a0aec0;">({dias_corridos:.0f}d corridos / {dias_ativos:.1f}d ativos)</span></h3>
+                    {badge_html}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if not esconder_detalhes:
+                c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+                c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
+                c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
+                c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
+                
+                c_p4.metric(
+                    "Perda Impermanente (IL)", 
+                    f"{il_pct:.2f}% (${il_usd:,.2f})", 
+                    delta=f"{dias_cobertura:.1f} dias p/ anular" if il_usd > 0 else "0 dias", 
+                    delta_color="inverse"
+                )
+
+                if motivo_saida and estado != "Ativa":
+                    st.caption(motivo_saida)
+
+                render_sparkline_chart(p_nat, r_min, r_max)
+
+                c_p5, c_p6, c_p7, c_p8 = st.columns(4)
+                c_p5.metric("Fees Sacadas", f"${v_fees_sacadas:,.2f}")
+                c_p6.metric("Fees Por Recolher", f"${v_fees_por_recolher:,.2f}")
+                c_p7.metric("Rendimento Diário", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
+                c_p8.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
+
+                with st.expander(f"💸 Registo Rápido de Saque — {par}"):
+                    key_input = f"input_saque_{pool_id}"
+                    if key_input not in st.session_state:
+                        st.session_state[key_input] = 0.0
+
+                    col_saque_val, col_saque_btn = st.columns([3, 1])
+                    val_saque_hoje = col_saque_val.number_input(
+                        "Valor das fees sacadas hoje ($ USD):", 
+                        min_value=0.0, 
+                        step=1.0, 
+                        key=key_input
+                    )
+                    
+                    if col_saque_btn.button("⚡ Registar Saque", key=f"btn_saque_{pool_id}", use_container_width=True):
+                        if val_saque_hoje > 0:
+                            novas_fees_sacadas = v_fees_sacadas + val_saque_hoje
+                            patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+                            res = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
+                            if res.status_code in [200, 204]:
+                                st.session_state[key_input] = 0.0
+                                st.success(f"Adicionados +${val_saque_hoje:,.2f} em fees sacadas de {par}!")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("Erro ao atualizar o Supabase.")
+
+            st.markdown("---")
+
+# -----------------------------------------------------------------------------
+# 8. GRÁFICOS
+# -----------------------------------------------------------------------------
+st.subheader("📊 Análise do Portfólio")
+col_g1, col_g2 = st.columns(2)
+
+with col_g1:
+    if pools_processadas:
+        df_pie = pd.DataFrame(pools_processadas)
+        fig_pie = px.pie(
+            df_pie, 
+            names="par", 
+            values="v_atual_calc", 
+            title="Distribuição do Capital Ativo por Pool",
+            hole=0.4
+        )
+        fig_pie.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", 
+            plot_bgcolor="rgba(0,0,0,0)", 
+            font_color="white", 
+            margin=dict(l=10, r=10, t=40, b=10)
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+with col_g2:
+    hist_data = get_historico_pnl()
+    if hist_data:
+        df_hist = pd.DataFrame(hist_data)
+        fig_hist = px.area(
+            df_hist, 
+            x="data", 
+            y="valor_total_usd", 
+            title="Evolução do Valor Total ($ USD)",
+            markers=True
+        )
+        fig_hist.update_traces(line_color="#10b981", fillcolor="rgba(16, 185, 129, 0.1)")
+        fig_hist.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", 
+            plot_bgcolor="rgba(0,0,0,0)", 
+            font_color="white", 
+            margin=dict(l=10, r=10, t=40, b=10)
+        )
+        st.plotly_chart(fig_hist, use_container_width=True)
+    else:
+        st.info("A aguardar histórico de PnL...")
+
+# -----------------------------------------------------------------------------
+# 9. FERRAMENTAS & GESTÃO DE POOLS
+# -----------------------------------------------------------------------------
+st.markdown("---")
+st.subheader("🛠️ Ferramentas & Gestão")
+
+tab_add, tab_edit, tab_calc, tab_table, tab_llama = st.tabs([
+    "➕ Adicionar Pool", 
+    "✏ Editar Posição", 
+    "🧮 Calculadora & IL", 
+    "📄 Tabela Geral",
+    "🔥 DefiLlama Yields"
+])
+
+with tab_add:
+    with st.form("form_add_pool"):
+        c1, c2, c3 = st.columns(3)
+        par_in = c1.text_input("Par (ex: SOL/USDC)", "")
+        addr_in = c2.text_input("Pair Address (DexScreener)", "")
+        invest_in = c3.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
+
+        c4, c5, c6 = st.columns(3)
+        p_nat_inicial_in = c4.number_input("Preço Nativo Inicial", min_value=0.0, format="%.8f")
+        peso_a_in = c5.number_input("Peso do Token A (ex: 0.5 para 50/50)", min_value=0.01, max_value=0.99, value=0.50, format="%.2f")
+        v_atual_in = c6.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
+
+        c7, c8, c9 = st.columns(3)
+        rmin_in = c7.number_input("Range Mínimo", min_value=0.0, format="%.8f")
+        rmax_in = c8.number_input("Range Máximo", min_value=0.0, format="%.8f")
+        data_ent_in = c9.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
+        
+        c10, c11 = st.columns(2)
+        fees_sacadas_in = c10.number_input("Fees Já Sacadas ($ USD)", min_value=0.0, step=1.0)
+        fees_por_recolher_in = c11.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
+
+        btn_save = st.form_submit_button("Salvar Nova Pool")
+
+        if btn_save:
+            if not par_in or not addr_in:
+                st.warning("Preencha o nome do par e a morada.")
+            else:
+                p_usd, p_nat = fetch_dexscreener_data(addr_in)
+                payload = {
+                    "par": par_in,
+                    "wallet_address": addr_in,
+                    "valor_inicial": invest_in,
+                    "valor_atual": v_atual_in if v_atual_in > 0 else invest_in,
+                    "fees": fees_sacadas_in,
+                    "position_pubkey": str(fees_por_recolher_in),
+                    "data_entrada": data_ent_in,
+                    "preco_inicial": p_nat_inicial_in if p_nat_inicial_in > 0 else (p_nat or 0),
+                    "peso_a": peso_a_in,
+                    "range_min": rmin_in,
+                    "range_max": rmax_in,
+                    "preco_nativo": p_nat or 0,
+                    "preco_atual": p_usd or 0,
+                    "estado": "Ativa",
+                    "horas_inativa": 0.0
+                }
+                res = requests.post(f"{SUPABASE_URL}/rest/v1/pools", headers=headers, json=payload)
+                if res.status_code in [200, 201]:
+                    st.success("Pool adicionada com sucesso!")
+                    st.rerun()
+
+with tab_edit:
+    if not pools:
+        st.info("Não existem pools para editar.")
+    else:
+        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')}": p for p in pools}
+        escolha = st.selectbox("Selecione a Pool a Editar:", list(lista_opcoes.keys()))
+        pool_sel = lista_opcoes[escolha]
+        
+        with st.form("form_edit_pool"):
+            st.markdown(f"**Editar Posição ID {pool_sel['id']} ({pool_sel.get('par')})**")
+
+            e1, e2, e3 = st.columns(3)
+            e_val_atual = e1.number_input("Valor Atual Posição ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
+            e_pnat_inicial = e2.number_input("Preço Nativo Inicial", value=to_float(pool_sel.get("preco_inicial")), format="%.8f")
+            e_peso_a = e3.number_input("Peso do Token A (ex: 0.5)", value=to_float(pool_sel.get("peso_a"), 0.5), format="%.2f")
+
+            e4, e5, e6 = st.columns(3)
+            e_fees_sacadas = e4.number_input("Fees Já Sacadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
+            e_fees_por_recolher = e5.number_input("Fees Por Recolher ($)", value=to_float(pool_sel.get("position_pubkey")), step=1.0)
+            e_data_ent = e6.text_input("Data Entrada", value=str(pool_sel.get("data_entrada", "")))
+
+            e7, e8 = st.columns(2)
+            e_rmin = e7.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
+            e_rmax = e8.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
+
+            btn_update = st.form_submit_button("💾 Guardar Alterações")
+
+            if btn_update:
+                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+                update_payload = {
+                    "valor_atual": e_val_atual,
+                    "preco_inicial": e_pnat_inicial,
+                    "peso_a": e_peso_a,
+                    "fees": e_fees_sacadas,
+                    "position_pubkey": str(e_fees_por_recolher),
+                    "data_entrada": e_data_ent,
+                    "range_min": e_rmin,
+                    "range_max": e_rmax
+                }
+                res = requests.patch(patch_url, headers=headers, json=update_payload)
+                if res.status_code in [200, 204]:
+                    st.success("Alterações guardadas!")
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao guardar: {res.text}")
+
+        st.markdown("---")
+        st.markdown("#### 🚨 Eliminar Posição")
+        if st.button(f"🗑️ Eliminar Permanente ID {pool_sel['id']}", type="primary", use_container_width=True):
+            del_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+            del_res = requests.delete(del_url, headers=headers)
+            if del_res.status_code in [200, 204]:
+                st.success("Pool eliminada!")
+                st.rerun()
+
+with tab_calc:
+    col_c1, col_c2 = st.columns(2)
+
+    with col_c1:
+        st.markdown("#### 🎯 Calculadora de Novos Ranges")
+        p_ref = st.number_input("Preço Nativo Atual", min_value=0.0, value=0.000049, format="%.8f", key="calc_p_ref")
+        var_pct = st.slider("Amplitude (± %)", min_value=1.0, max_value=50.0, value=15.0, step=0.5, key="calc_var_pct")
+
+        if p_ref > 0:
+            novo_min = p_ref * (1 - (var_pct / 100))
+            novo_max = p_ref * (1 + (var_pct / 100))
+            st.write(f"**Novo Range Mínimo (-{var_pct}%):** `{format_crypto_price(novo_min)}`")
+            st.write(f"**Novo Range Máximo (+{var_pct}%):** `{format_crypto_price(novo_max)}`")
+
+    with col_c2:
+        st.markdown("#### 📉 Simulador de IL Ponderado")
+        var_preco_simulada = st.slider("Variação de Preço (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0, key="calc_il_slider")
+        peso_sim = st.slider("Peso do Token A (wa)", min_value=0.1, max_value=0.9, value=0.5, step=0.05, key="calc_peso_sim")
+        
+        razao = 1.0 + (var_preco_simulada / 100.0)
+        wb = 1.0 - peso_sim
+        v_h = (peso_sim * razao) + wb
+        v_l = razao ** peso_sim
+        il_resultado = ((v_l / v_h) - 1) * 100 if v_h > 0 else 0.0
+        
+        st.metric("IL Estimada", f"{il_resultado:.2f}%", delta=f"{il_resultado:.2f}%", delta_color="inverse")
+
+with tab_table:
+    if pools_processadas:
+        df_table = pd.DataFrame(pools_processadas)
+        
+        cols_display = {
+            "id": "ID",
+            "par": "Par",
+            "estado": "Estado",
+            "v_inicial_calc": "Investido ($)",
+            "v_atual_calc": "Valor Atual ($)",
+            "il_pct_calc": "IL (%)",
+            "dias_cobertura_calc": "Dias P/ Anular IL",
+            "fees_sacadas_calc": "Fees Sacadas ($)",
+            "fees_por_recolher_calc": "Fees Por Recolher ($)",
+            "fees_calc": "Fees Totais ($)",
+            "pnl_pool": "Ganhos / Perdas ($ USD)",
+            "roi_pool": "ROI (%)"
+        }
+        
+        existing_cols = [c for c in cols_display.keys() if c in df_table.columns]
+        df_display = df_table[existing_cols].rename(columns=cols_display)
+        
+        for col in ["Investido ($)", "Valor Atual ($)", "Fees Sacadas ($)", "Fees Por Recolher ($)", "Fees Totais ($)", "Ganhos / Perdas ($ USD)"]:
+            if col in df_display.columns:
+                df_display[col] = df_display[col].apply(lambda x: f"${x:,.2f}")
+        
+        if "IL (%)" in df_display.columns:
+            df_display["IL (%)"] = df_display["IL (%)"].apply(lambda x: f"{x:.2f}%")
+        if "Dias P/ Anular IL" in df_display.columns:
+            df_display["Dias P/ Anular IL"] = df_display["Dias P/ Anular IL"].apply(lambda x: f"{x:.1f} dias")
+        if "ROI (%)" in df_display.columns:
+            df_display["ROI (%)"] = df_display["ROI (%)"].apply(lambda x: f"{x:.2f}%")
+
+        df_display = df_display.fillna("")
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhuma posição registada na base de dados.")
+
+with tab_llama:
+    st.markdown("#### 🦙 Maiores Rendimentos DeFi em Tempo Real (DefiLlama)")
+    data_llama = fetch_defillama_yields()
+    
+    if not data_llama:
+        st.warning("Não foi possível carregar os dados do DefiLlama de momento.")
+    else:
+        df_llama = pd.DataFrame(data_llama)
+        col_f1, col_f2, col_f3 = st.columns(3)
+        
+        chains_disponiveis = sorted(df_llama["chain"].dropna().unique().tolist())
+        default_chains = [c for c in ["Solana", "Ethereum", "Arbitrum"] if c in chains_disponiveis]
+        chain_sel = col_f1.multiselect("Filtrar por Rede (Chain):", chains_disponiveis, default=default_chains)
+        tvl_min = col_f2.number_input("TVL Mínimo ($ USD):", min_value=10000, value=100000, step=50000)
+        ordem_sel = col_f3.selectbox("Ordenar por:", ["APY Total (apy)", "APY Base / Fees (apyBase)", "TVL ($)"])
+
+        df_filtered = df_llama[df_llama["chain"].isin(chain_sel)] if chain_sel else df_llama
+        df_filtered = df_filtered[df_filtered["tvlUsd"] >= tvl_min]
+
+        sort_col = "apy"
+        if ordem_sel == "APY Base / Fees (apyBase)":
+            sort_col = "apyBase"
+        elif ordem_sel == "TVL ($)":
+            sort_col = "tvlUsd"
+
+        df_filtered = df_filtered.sort_values(by=sort_col, ascending=False).head(50)
+        
+        df_filtered["link_llama"] = df_filtered.apply(lambda r: f"https://defillama.com/yields/pool/{r['pool']}", axis=1)
+        
+        cols_map = {
+            "symbol": "Par / Símbolo",
+            "project": "Protocolo",
+            "chain": "Rede",
+            "tvlUsd": "TVL ($)",
+            "apy": "APY Total (%)",
+            "link_llama": "DefiLlama"
+        }
+        
+        df_show = df_filtered[list(cols_map.keys())].rename(columns=cols_map)
+        df_show["TVL ($)"] = df_show["TVL ($)"].apply(lambda x: f"${x:,.0f}")
+        df_show["APY Total (%)"] = df_show["APY Total (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
+
+        st.dataframe(
+            df_show, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "DefiLlama": st.column_config.LinkColumn("DefiLlama", display_text="🦙 Ver Pool")
+            }
+        )
