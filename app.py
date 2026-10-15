@@ -209,6 +209,16 @@ def get_historico_pnl():
         pass
     return []
 
+def get_historico_fees():
+    url = f"{SUPABASE_URL}/rest/v1/historico_fees?select=*&order=data.desc,id.desc"
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    return []
+
 def to_float(val, default=0.0):
     if val is None:
         return default
@@ -598,14 +608,29 @@ else:
                         step=1.0, 
                         key=f"input_saque_{pool_id}"
                     )
+                    data_saque_hoje = st.date_input(
+                        "Data do Saque:", 
+                        value=date.today(), 
+                        key=f"input_data_saque_{pool_id}"
+                    )
                     
                     if st.button("⚡ Registar Saque", key=f"btn_saque_{pool_id}", use_container_width=True):
                         if val_saque_hoje > 0:
                             novas_fees_sacadas = v_fees_sacadas + val_saque_hoje
                             patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
-                            res = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
-                            if res.status_code in [200, 204]:
-                                st.success(f"Adicionados +${val_saque_hoje:,.2f} em fees sacadas de {par}!")
+                            res_pool = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
+                            
+                            # Registar também no histórico de fees
+                            payload_historico = {
+                                "data": str(data_saque_hoje),
+                                "pool_id": pool_id,
+                                "par": par,
+                                "valor_usd": round(val_saque_hoje, 2)
+                            }
+                            res_hist = requests.post(f"{SUPABASE_URL}/rest/v1/historico_fees", headers=headers, json=payload_historico)
+
+                            if res_pool.status_code in [200, 204] and res_hist.status_code in [200, 201]:
+                                st.success(f"Registadas +${val_saque_hoje:,.2f} em fees para {par} na data {data_saque_hoje}!")
                                 time.sleep(1)
                                 st.rerun()
                             else:
@@ -665,11 +690,12 @@ with col_g2:
 st.markdown("---")
 st.subheader("🛠️ Ferramentas & Gestão")
 
-tab_add, tab_edit, tab_calc, tab_table, tab_llama = st.tabs([
+tab_add, tab_edit, tab_calc, tab_table, tab_fees_hist, tab_llama = st.tabs([
     "➕ Adicionar Pool", 
     "✏ Editar Posição", 
     "🧮 Calculadora & IL", 
     "📄 Tabela Geral",
+    "📜 Histórico de Fees",
     "🔥 DefiLlama Yields"
 ])
 
@@ -854,6 +880,21 @@ with tab_table:
         st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
         st.info("Nenhuma posição registada na base de dados.")
+
+with tab_fees_hist:
+    st.markdown("#### 📜 Registo Histórico de Saques de Fees")
+    fees_hist_data = get_historico_fees()
+    if fees_hist_data:
+        df_fees_hist = pd.DataFrame(fees_hist_data)
+        df_fees_hist = df_fees_hist[["data", "par", "valor_usd"]].rename(columns={
+            "data": "Data do Saque",
+            "par": "Par / Pool",
+            "valor_usd": "Valor Sacado ($ USD)"
+        })
+        df_fees_hist["Valor Sacado ($ USD)"] = df_fees_hist["Valor Sacado ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        st.dataframe(df_fees_hist, use_container_width=True, hide_index=True)
+    else:
+        st.info("Ainda não existem registos de saques de fees guardados.")
 
 with tab_llama:
     st.markdown("#### 🦙 Maiores Rendimentos DeFi em Tempo Real (DefiLlama)")
