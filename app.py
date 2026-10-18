@@ -582,7 +582,10 @@ else:
                 c_p1, c_p2, c_p3, c_p4 = st.columns(4)
                 c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
-                c_p3.metric("Investido / Atual", f"${v_inv:,.0f} /${v_at:,.0f}")
+                
+                # CARTÃO COM VALOR DE ENTRADA, ATUAL E DIFERENÇA EM DÓLARES
+                dif_valor = v_at - v_inv
+                c_p3.metric("Entrada / Atual", f"${v_inv:,.2f} / ${v_at:,.2f}", delta=f"${dif_valor:,.2f}")
                 
                 c_p4.metric(
                     "Perda Impermanente (IL)", 
@@ -730,7 +733,7 @@ with tab_add:
                 payload = {
                     "par": par_in,
                     "wallet_address": addr_in,
-                    "rede": rede_in,  # <--- GUARDADO NA COLUNA "rede"
+                    "rede": rede_in,
                     "valor_inicial": invest_in,
                     "valor_atual": v_atual_in if v_atual_in > 0 else invest_in,
                     "fees": fees_sacadas_in,
