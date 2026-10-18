@@ -524,6 +524,7 @@ else:
     for p in pools_filtradas:
         pool_id = p["id"]
         par = p.get("par", "Par N/A")
+        rede = p.get("rede", "DeFi")
         estado = p.get("estado", "Ativa")
         p_nat = to_float(p.get("preco_nativo"))
         p_usd = to_float(p.get("preco_atual"))
@@ -571,7 +572,7 @@ else:
             st.markdown(f"""
             <div class="{card_class}">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <h3 style="margin:0;">{par} <span style="font-size: 0.8rem; color: #a0aec0;">({dias_corridos:.0f}d corridos / {dias_ativos:.1f}d ativos)</span></h3>
+                    <h3 style="margin:0;">{par} <span style="font-size: 0.9rem; color: #38bdf8;">({rede})</span> <span style="font-size: 0.8rem; color: #a0aec0;">({dias_corridos:.0f}d corridos)</span></h3>
                     {badge_html}
                 </div>
             </div>
@@ -620,7 +621,6 @@ else:
                             patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
                             res_pool = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
                             
-                            # Registar também no histórico de fees
                             payload_historico = {
                                 "data": str(data_saque_hoje),
                                 "pool_id": pool_id,
@@ -704,20 +704,21 @@ with tab_add:
         c1, c2, c3 = st.columns(3)
         par_in = c1.text_input("Par (ex: SOL/USDC)", "")
         addr_in = c2.text_input("Pair Address (DexScreener)", "")
-        invest_in = c3.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
+        rede_in = c3.text_input("Rede / Plataforma (ex: Raydium - SOLANA)", "Raydium - SOLANA")
 
-        c4, c5 = st.columns(2)
-        p_nat_inicial_in = c4.number_input("Preço Nativo Inicial", min_value=0.0, format="%.8f")
-        v_atual_in = c5.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
+        c4, c5, c6 = st.columns(3)
+        invest_in = c4.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
+        p_nat_inicial_in = c5.number_input("Preço Nativo Inicial", min_value=0.0, format="%.8f")
+        v_atual_in = c6.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
 
-        c6, c7, c8 = st.columns(3)
-        rmin_in = c6.number_input("Range Mínimo", min_value=0.0, format="%.8f")
-        rmax_in = c7.number_input("Range Máximo", min_value=0.0, format="%.8f")
-        data_ent_in = c8.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
+        c7, c8, c9 = st.columns(3)
+        rmin_in = c7.number_input("Range Mínimo", min_value=0.0, format="%.8f")
+        rmax_in = c8.number_input("Range Máximo", min_value=0.0, format="%.8f")
+        data_ent_in = c9.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
         
-        c9, c10 = st.columns(2)
-        fees_sacadas_in = c9.number_input("Fees Já Sacadas ($ USD)", min_value=0.0, step=1.0)
-        fees_por_recolher_in = c10.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
+        c10, c11 = st.columns(2)
+        fees_sacadas_in = c10.number_input("Fees Já Sacadas ($ USD)", min_value=0.0, step=1.0)
+        fees_por_recolher_in = c11.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
 
         btn_save = st.form_submit_button("Salvar Nova Pool")
 
@@ -729,6 +730,7 @@ with tab_add:
                 payload = {
                     "par": par_in,
                     "wallet_address": addr_in,
+                    "rede": rede_in,  # <--- GUARDADO NA COLUNA "rede"
                     "valor_inicial": invest_in,
                     "valor_atual": v_atual_in if v_atual_in > 0 else invest_in,
                     "fees": fees_sacadas_in,
@@ -754,12 +756,14 @@ with tab_edit:
     if not pools:
         st.info("Não existem pools para editar.")
     else:
-        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')}": p for p in pools}
+        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')} ({p.get('rede', '')})": p for p in pools}
         escolha = st.selectbox("Selecione a Pool a Editar:", list(lista_opcoes.keys()))
         pool_sel = lista_opcoes[escolha]
         
         with st.form("form_edit_pool"):
             st.markdown(f"**Editar Posição ID {pool_sel['id']} ({pool_sel.get('par')})**")
+
+            e_rede = st.text_input("Rede / Plataforma", value=str(pool_sel.get("rede", "")))
 
             e1, e2 = st.columns(2)
             e_val_atual = e1.number_input("Valor Atual Posição ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
@@ -779,6 +783,7 @@ with tab_edit:
             if btn_update:
                 patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
                 update_payload = {
+                    "rede": e_rede,
                     "valor_atual": e_val_atual,
                     "preco_inicial": e_pnat_inicial,
                     "fees": e_fees_sacadas,
@@ -850,6 +855,7 @@ with tab_table:
         cols_display = {
             "id": "ID",
             "par": "Par",
+            "rede": "Rede / Plataforma",
             "estado": "Estado",
             "v_inicial_calc": "Investido ($)",
             "v_atual_calc": "Valor Atual ($)",
