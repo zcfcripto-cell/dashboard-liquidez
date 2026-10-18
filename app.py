@@ -568,12 +568,21 @@ else:
             badge_html = f'<span class="badge-inactive">🔴 FORA ({tipo_desvio} | {hrs_inativa:.1f}h)</span>'
             card_class = "pool-card pool-card-inactive"
 
+        dif_valor = v_at - v_inv
+        cor_dif = "#10b981" if dif_valor >= 0 else "#ef4444"
+        sinal_dif = "+" if dif_valor > 0 else ""
+
         with st.container():
             st.markdown(f"""
             <div class="{card_class}">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                     <h3 style="margin:0;">{par} <span style="font-size: 0.9rem; color: #38bdf8;">({rede})</span> <span style="font-size: 0.8rem; color: #a0aec0;">({dias_corridos:.0f}d corridos)</span></h3>
                     {badge_html}
+                </div>
+                <div style="font-size: 0.9rem; color: #cbd5e1; display: flex; gap: 16px; border-top: 1px solid #2d3748; padding-top: 6px;">
+                    <span>📥 <b>Entrada:</b> ${v_inv:,.2f}</span>
+                    <span>💵 <b>Atual:</b> ${v_at:,.2f}</span>
+                    <span>📊 <b>Dif:</b> <span style="color: {cor_dif};">{sinal_dif}${dif_valor:,.2f}</span></span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -582,11 +591,7 @@ else:
                 c_p1, c_p2, c_p3, c_p4 = st.columns(4)
                 c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
-                
-                # CARTÃO COM VALOR DE ENTRADA, ATUAL E DIFERENÇA EM DÓLARES
-                dif_valor = v_at - v_inv
-                c_p3.metric("Entrada / Atual", f"${v_inv:,.2f} / ${v_at:,.2f}", delta=f"${dif_valor:,.2f}")
-                
+                c_p3.metric("Rendimento Diário", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
                 c_p4.metric(
                     "Perda Impermanente (IL)", 
                     f"{il_pct:.2f}% (${il_usd:,.2f})", 
@@ -602,7 +607,7 @@ else:
                 c_p5, c_p6, c_p7, c_p8 = st.columns(4)
                 c_p5.metric("Fees Sacadas", f"${v_fees_sacadas:,.2f}")
                 c_p6.metric("Fees Por Recolher", f"${v_fees_por_recolher:,.2f}")
-                c_p7.metric("Rendimento Diário", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
+                c_p7.metric("Fees Totais", f"${v_fees_totais:,.2f}")
                 c_p8.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
 
                 with st.expander(f"💸 Registo Rápido de Saque — {par}"):
