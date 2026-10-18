@@ -310,10 +310,61 @@ def calcular_dias_para_anular_il(il_usd, fees_dia_media):
         return 0.0
     return il_usd / fees_dia_media
 
+def sincronizar_pools_silencioso(pools_lista):
+    """Sincroniza os preços mais recentes do DexScreener automaticamente."""
+    agora = time.time()
+    for p in pools_lista:
+        addr = p.get("wallet_address")
+        if addr:
+            p_usd, p_nat = fetch_dexscreener_data(addr)
+            if p_nat is not None:
+                r_min = to_float(p.get("range_min"))
+                r_max = to_float(p.get("range_max"))
+                
+                in_range = True
+                if r_max > 0 and p_nat > r_max:
+                    in_range = False
+                elif r_min > 0 and p_nat < r_min:
+                    in_range = False
+                
+                novo_estado = "Ativa" if in_range else "Inativa"
+                
+                # Recalcular valor atual estimado dinamicamente baseado na variação do token e no peso CLMM
+                p_ini = to_float(p.get("preco_inicial"))
+                v_inv = to_float(p.get("valor_inicial"))
+                v_at_db = to_float(p.get("valor_atual"))
+                
+                # Se houver variação de preço válida, recalcula a estimativa em USD da posição
+                if p_ini > 0 and p_nat > 0 and v_inv > 0:
+                    wa = calcular_peso_clmm(p_nat, r_min, r_max)
+                    wb = 1.0 - wa
+                    ratio = p_nat / p_ini
+                    v_estimado = v_inv * ((wa * ratio) + wb)
+                else:
+                    v_estimado = v_at_db if v_at_db > 0 else v_inv
+
+                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{p['id']}"
+                patch_data = {
+                    "preco_nativo": p_nat,
+                    "estado": novo_estado,
+                    "valor_atual": round(v_estimado, 2),
+                    "last_price_update": agora
+                }
+                if p_usd:
+                    patch_data["preco_atual"] = p_usd
+                    
+                requests.patch(patch_url, headers=headers, json=patch_data)
+
 # -----------------------------------------------------------------------------
-# 4. BARRA LATERAL & OPÇÕES
+# 4. CARREGAMENTO E AUTO-SYNC
 # -----------------------------------------------------------------------------
 pools = get_pools()
+
+# Auto-sincronização na primeira execução ou se a página for recarregada há mais de 3 minutos
+if "last_auto_sync" not in st.session_state or (time.time() - st.session_state["last_auto_sync"] > 180):
+    sincronizar_pools_silencioso(pools)
+    st.session_state["last_auto_sync"] = time.time()
+    pools = get_pools() # Recarrega dados já sincronizados
 
 st.sidebar.title("⚡ DeFi Hub Pro")
 filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Apenas Abertas (Ativas/Fora)", "Ativas 🟢", "Fora de Range 🔴", "Todas"])
@@ -323,59 +374,7 @@ esconder_detalhes = st.sidebar.checkbox("👁️ Ocultar Detalhes das Pools", va
 st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     with st.spinner("A atualizar posições abertas..."):
-        agora = time.time()
-        for p in pools:
-            estado_anterior = normalizar_estado(p.get("estado"))
-            addr = p.get("wallet_address")
-            par = p.get("par", "Par N/A")
-            
-            if addr:
-                p_usd, p_nat = fetch_dexscreener_data(addr)
-                if p_nat is not None:
-                    r_min = to_float(p.get("range_min"))
-                    r_max = to_float(p.get("range_max"))
-                    
-                    in_range = True
-                    desvio_txt = ""
-                    if r_max > 0 and p_nat > r_max:
-                        in_range = False
-                        pct = ((p_nat - r_max) / r_max) * 100
-                        desvio_txt = f"+{pct:.2f}% (Acima do Máximo)"
-                    elif r_min > 0 and p_nat < r_min:
-                        in_range = False
-                        pct = ((r_min - p_nat) / r_min) * 100
-                        desvio_txt = f"-{pct:.2f}% (Abaixo do Mínimo)"
-                    
-                    novo_estado = "Ativa" if in_range else "Inativa"
-                    last_update = to_float(p.get("last_price_update"))
-                    horas_inativas_atuais = to_float(p.get("horas_inativa"))
-                    
-                    if novo_estado == "Inativa":
-                        if estado_anterior == "Inativa" and last_update > 0:
-                            horas_decorridas = (agora - last_update) / 3600.0
-                            novas_horas_inativa = horas_inativas_atuais + horas_decorridas
-                        else:
-                            novas_horas_inativa = horas_inativas_atuais
-                    else:
-                        novas_horas_inativa = horas_inativas_atuais
-                    
-                    patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{p['id']}"
-                    patch_data = {
-                        "preco_nativo": p_nat,
-                        "estado": novo_estado,
-                        "horas_inativa": novas_horas_inativa,
-                        "last_price_update": agora
-                    }
-                    if p_usd:
-                        patch_data["preco_atual"] = p_usd
-                        
-                    requests.patch(patch_url, headers=headers, json=patch_data)
-
-                    if novo_estado == "Inativa" and estado_anterior == "Ativa":
-                        send_telegram(f"🚨 <b>FORA DE RANGE:</b> {par}\nPreço: {format_crypto_price(p_nat)}\nDesvio: {desvio_txt}")
-                    elif novo_estado == "Ativa" and estado_anterior == "Inativa":
-                        send_telegram(f"🟢 <b>VOLTOU AO RANGE:</b> {par}\nPreço: {format_crypto_price(p_nat)}")
-
+        sincronizar_pools_silencioso(pools)
     st.sidebar.success("Sincronizado!")
     st.rerun()
 
