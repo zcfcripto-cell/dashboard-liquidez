@@ -3,6 +3,7 @@ import time
 import math
 import random
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 import requests
 import pandas as pd
 import plotly.express as px
@@ -96,6 +97,10 @@ headers = {
 # -----------------------------------------------------------------------------
 # 3. FUNÇÕES AUXILIARES & APIS PÚBLICAS
 # -----------------------------------------------------------------------------
+def get_agora_pt():
+    """Devolve a data e hora atual em Portugal Continental (Europe/Lisbon)."""
+    return datetime.now(ZoneInfo("Europe/Lisbon"))
+
 def normalizar_estado(estado_raw):
     e = str(estado_raw or "").strip().lower()
     if "fechad" in e or "closed" in e or "fechada" in e:
@@ -243,7 +248,8 @@ def calcular_dias_metricas(data_str, horas_inativa):
         return 1.0, 1.0
     try:
         data_inicio = datetime.strptime(str(data_str).strip(), "%Y-%m-%d").date()
-        dias_corridos = max((date.today() - data_inicio).days, 1)
+        hoje_pt = get_agora_pt().date()
+        dias_corridos = max((hoje_pt - data_inicio).days, 1)
         dias_inativos = to_float(horas_inativa) / 24.0
         dias_ativos = max(dias_corridos - dias_inativos, 0.1)
         return float(dias_corridos), float(dias_ativos)
@@ -466,7 +472,6 @@ pct_dia_anterior = 0.0
 delta_texto_pools = "Sem histórico anterior"
 
 if hist_pnl_data and len(hist_pnl_data) >= 1:
-    # Pega no último registo guardado (dia anterior ou mais recente)
     ultimo_registo = hist_pnl_data[-1]
     valor_anterior = to_float(ultimo_registo.get("valor_total_usd"))
     if valor_anterior > 0:
@@ -476,14 +481,14 @@ if hist_pnl_data and len(hist_pnl_data) >= 1:
         delta_texto_pools = f"{sinal_str}${dif_dia_anterior:,.2f} ({sinal_str}{pct_dia_anterior:.2f}%) vs ontem"
 
 if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
-    hoje = datetime.now().strftime('%Y-%m-%d')
+    hoje = get_agora_pt().strftime('%Y-%m-%d')
     payload_pnl = {
         "data": hoje,
         "valor_total_usd": round(valor_total_com_fees, 2)
     }
     res = requests.post(f"{SUPABASE_URL}/rest/v1/historico_pnl", headers=headers, json=payload_pnl)
     if res.status_code in [200, 201]:
-        st.sidebar.success(f"Snapshot de {hoje} (${valor_total_com_fees:,.2f}) guardado!")
+        st.sidebar.success(f"Snapshot de {hoje} (${valor_total_com_fees:,.2f}) guardado com hora de PT!")
         time.sleep(1)
         st.rerun()
     else:
@@ -491,7 +496,7 @@ if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
 
 if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
     msg_resumo = (
-        f"📊 <b>PORTFÓLIO DEFI</b>\n\n"
+        f"📊 <b>PORTFÓLIO DEFI ({get_agora_pt().strftime('%d/%m/%Y %H:%M')} PT)</b>\n\n"
         f"💰 <b>Investido:</b> ${total_investido:,.2f}\n"
         f"💵 <b>Atual:</b> ${total_valor_atual:,.2f}\n"
         f"💸 <b>Fees Totais:</b> ${total_fees:,.2f} (${total_fees_sacadas:,.2f} sacadas)\n"
@@ -508,7 +513,6 @@ st.title("⚡ Liquidity Hub Pro")
 
 k1, k2, k3 = st.columns(3)
 k1.metric("Investimento Ativo", f"${total_investido:,.2f}")
-# VALOR EM POOLS COM A VARIAÇÃO EM % E VALOR RELATIVA AO DIA ANTERIOR
 k2.metric("Valor em Pools", f"${total_valor_atual:,.2f}", delta=delta_texto_pools)
 k3.metric("Fees Totais 💸", f"${total_fees:,.2f}", delta=f"${total_fees_sacadas:,.2f} sacadas")
 
@@ -631,7 +635,7 @@ else:
                     )
                     data_saque_hoje = st.date_input(
                         "Data do Saque:", 
-                        value=date.today(), 
+                        value=get_agora_pt().date(), 
                         key=f"input_data_saque_{pool_id}"
                     )
                     
@@ -734,7 +738,7 @@ with tab_add:
         c7, c8, c9 = st.columns(3)
         rmin_in = c7.number_input("Range Mínimo", min_value=0.0, format="%.8f")
         rmax_in = c8.number_input("Range Máximo", min_value=0.0, format="%.8f")
-        data_ent_in = c9.text_input("Data Entrada (YYYY-MM-DD)", value=datetime.now().strftime('%Y-%m-%d'))
+        data_ent_in = c9.text_input("Data Entrada (YYYY-MM-DD)", value=get_agora_pt().strftime('%Y-%m-%d'))
         
         c10, c11 = st.columns(2)
         fees_sacadas_in = c10.number_input("Fees Já Sacadas ($ USD)", min_value=0.0, step=1.0)
