@@ -311,7 +311,6 @@ def calcular_dias_para_anular_il(il_usd, fees_dia_media):
     return il_usd / fees_dia_media
 
 def sincronizar_pools_silencioso(pools_lista):
-    """Sincroniza os preços mais recentes do DexScreener automaticamente."""
     agora = time.time()
     for p in pools_lista:
         addr = p.get("wallet_address")
@@ -329,12 +328,10 @@ def sincronizar_pools_silencioso(pools_lista):
                 
                 novo_estado = "Ativa" if in_range else "Inativa"
                 
-                # Recalcular valor atual estimado dinamicamente baseado na variação do token e no peso CLMM
                 p_ini = to_float(p.get("preco_inicial"))
                 v_inv = to_float(p.get("valor_inicial"))
                 v_at_db = to_float(p.get("valor_atual"))
                 
-                # Se houver variação de preço válida, recalcula a estimativa em USD da posição
                 if p_ini > 0 and p_nat > 0 and v_inv > 0:
                     wa = calcular_peso_clmm(p_nat, r_min, r_max)
                     wb = 1.0 - wa
@@ -360,11 +357,10 @@ def sincronizar_pools_silencioso(pools_lista):
 # -----------------------------------------------------------------------------
 pools = get_pools()
 
-# Auto-sincronização na primeira execução ou se a página for recarregada há mais de 3 minutos
 if "last_auto_sync" not in st.session_state or (time.time() - st.session_state["last_auto_sync"] > 180):
     sincronizar_pools_silencioso(pools)
     st.session_state["last_auto_sync"] = time.time()
-    pools = get_pools() # Recarrega dados já sincronizados
+    pools = get_pools()
 
 st.sidebar.title("⚡ DeFi Hub Pro")
 filtro_estado = st.sidebar.selectbox("Filtrar Posições:", ["Apenas Abertas (Ativas/Fora)", "Ativas 🟢", "Fora de Range 🔴", "Todas"])
@@ -463,6 +459,22 @@ valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
+# Obter o valor do dia anterior do histórico de PnL para calcular a variação
+hist_pnl_data = get_historico_pnl()
+dif_dia_anterior = 0.0
+pct_dia_anterior = 0.0
+delta_texto_pools = "Sem histórico anterior"
+
+if hist_pnl_data and len(hist_pnl_data) >= 1:
+    # Pega no último registo guardado (dia anterior ou mais recente)
+    ultimo_registo = hist_pnl_data[-1]
+    valor_anterior = to_float(ultimo_registo.get("valor_total_usd"))
+    if valor_anterior > 0:
+        dif_dia_anterior = total_valor_atual - valor_anterior
+        pct_dia_anterior = (dif_dia_anterior / valor_anterior) * 100
+        sinal_str = "+" if dif_dia_anterior > 0 else ""
+        delta_texto_pools = f"{sinal_str}${dif_dia_anterior:,.2f} ({sinal_str}{pct_dia_anterior:.2f}%) vs ontem"
+
 if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
     hoje = datetime.now().strftime('%Y-%m-%d')
     payload_pnl = {
@@ -496,7 +508,8 @@ st.title("⚡ Liquidity Hub Pro")
 
 k1, k2, k3 = st.columns(3)
 k1.metric("Investimento Ativo", f"${total_investido:,.2f}")
-k2.metric("Valor em Pools", f"${total_valor_atual:,.2f}")
+# VALOR EM POOLS COM A VARIAÇÃO EM % E VALOR RELATIVA AO DIA ANTERIOR
+k2.metric("Valor em Pools", f"${total_valor_atual:,.2f}", delta=delta_texto_pools)
 k3.metric("Fees Totais 💸", f"${total_fees:,.2f}", delta=f"${total_fees_sacadas:,.2f} sacadas")
 
 k4, k5, k6 = st.columns(3)
