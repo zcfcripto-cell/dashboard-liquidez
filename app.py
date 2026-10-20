@@ -351,6 +351,11 @@ def sincronizar_pools_silencioso(pools_lista):
                     "preco_nativo": p_nat,
                     "estado": novo_estado,
                     "valor_atual": round(v_estimado, 2),
+                    "last_price_update": agorap
+                } if False else {
+                    "preco_nativo": p_nat,
+                    "estado": novo_estado,
+                    "valor_atual": round(v_estimado, 2),
                     "last_price_update": agora
                 }
                 if p_usd:
@@ -461,38 +466,40 @@ for p in pools:
     p_item["apr_ativo"] = apr_ativo
     pools_processadas.append(p_item)
 
-# Valor estritamente nas pools (capital atual + fees por recolher que continuam na pool, excluindo as fees sacadas que foram retiradas)
 valor_nas_pools = total_valor_atual + total_fees_por_recolher
 
-# Pnl Global contabiliza o valor atual + todas as fees ganhas (incluindo sacadas) menos o investido
 valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
-# Obter a variação diária face ao dia anterior utilizando estritamente o valor ativo nas pools (sem fees sacadas)
+# Obter variação diária filtrando estritamente por dias anteriores a hoje
+hoje_str = get_agora_pt().strftime('%Y-%m-%d')
 hist_pnl_data = get_historico_pnl()
 dif_dia_anterior = 0.0
 pct_dia_anterior = 0.0
+delta_delta_val = None
 delta_texto_pools = "Sem histórico anterior"
 
-if hist_pnl_data and len(hist_pnl_data) >= 1:
-    ultimo_registo = hist_pnl_data[-1]
-    valor_anterior = to_float(ultimo_registo.get("valor_total_usd"))
-    if valor_anterior > 0:
-        dif_dia_anterior = valor_nas_pools - valor_anterior
-        pct_dia_anterior = (dif_dia_anterior / valor_anterior) * 100
-        sinal_str = "+" if dif_dia_anterior > 0 else ""
-        delta_texto_pools = f"{sinal_str}${dif_dia_anterior:,.2f} ({sinal_str}{pct_dia_anterior:.2f}%) vs ontem"
+if hist_pnl_data:
+    registos_anteriores = [r for r in hist_pnl_data if str(r.get("data")) < hoje_str]
+    if registos_anteriores:
+        ultimo_registo = registos_anteriores[-1]
+        valor_anterior = to_float(ultimo_registo.get("valor_total_usd"))
+        if valor_anterior > 0:
+            dif_dia_anterior = valor_nas_pools - valor_anterior
+            pct_dia_anterior = (dif_dia_anterior / valor_anterior) * 100
+            sinal_str = "+" if dif_dia_anterior > 0 else ""
+            delta_texto_pools = f"{sinal_str}${dif_dia_anterior:,.2f} ({sinal_str}{pct_dia_anterior:.2f}%) vs ontem"
+            delta_delta_val = round(dif_dia_anterior, 2)
 
 if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
-    hoje = get_agora_pt().strftime('%Y-%m-%d')
     payload_pnl = {
-        "data": hoje,
+        "data": hoje_str,
         "valor_total_usd": round(valor_nas_pools, 2)
     }
     res = requests.post(f"{SUPABASE_URL}/rest/v1/historico_pnl", headers=headers, json=payload_pnl)
     if res.status_code in [200, 201]:
-        st.sidebar.success(f"Snapshot de {hoje} (${valor_nas_pools:,.2f}) guardado com hora de PT!")
+        st.sidebar.success(f"Snapshot de {hoje_str} (${valor_nas_pools:,.2f}) guardado!")
         time.sleep(1)
         st.rerun()
     else:
@@ -517,7 +524,13 @@ st.title("⚡ Liquidity Hub Pro")
 
 k1, k2, k3 = st.columns(3)
 k1.metric("Investimento Ativo", f"${total_investido:,.2f}")
-k2.metric("Valor em Pools", f"${total_valor_atual:,.2f}", delta=delta_texto_pools)
+
+# Passar o delta como número para o Streamlit calcular corretamente a cor (vermelho/verde) e a seta
+if delta_delta_val is not None:
+    k2.metric("Valor em Pools", f"${valor_nas_pools:,.2f}", delta=f"{delta_delta_val:+,.2f} ({pct_dia_anterior:+.2f}%) vs ontem")
+else:
+    k2.metric("Valor em Pools", f"${valor_nas_pools:,.2f}", delta="Sem histórico anterior")
+
 k3.metric("Fees Totais 💸", f"${total_fees:,.2f}", delta=f"${total_fees_sacadas:,.2f} sacadas")
 
 k4, k5, k6 = st.columns(3)
