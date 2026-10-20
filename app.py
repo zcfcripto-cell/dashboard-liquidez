@@ -351,11 +351,6 @@ def sincronizar_pools_silencioso(pools_lista):
                     "preco_nativo": p_nat,
                     "estado": novo_estado,
                     "valor_atual": round(v_estimado, 2),
-                    "last_price_update": agorap
-                } if False else {
-                    "preco_nativo": p_nat,
-                    "estado": novo_estado,
-                    "valor_atual": round(v_estimado, 2),
                     "last_price_update": agora
                 }
                 if p_usd:
@@ -488,8 +483,6 @@ if hist_pnl_data:
         if valor_anterior > 0:
             dif_dia_anterior = valor_nas_pools - valor_anterior
             pct_dia_anterior = (dif_dia_anterior / valor_anterior) * 100
-            sinal_str = "+" if dif_dia_anterior > 0 else ""
-            delta_texto_pools = f"{sinal_str}${dif_dia_anterior:,.2f} ({sinal_str}{pct_dia_anterior:.2f}%) vs ontem"
             delta_delta_val = round(dif_dia_anterior, 2)
 
 if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
@@ -525,7 +518,6 @@ st.title("⚡ Liquidity Hub Pro")
 k1, k2, k3 = st.columns(3)
 k1.metric("Investimento Ativo", f"${total_investido:,.2f}")
 
-# Passar o delta como número para o Streamlit calcular corretamente a cor (vermelho/verde) e a seta
 if delta_delta_val is not None:
     k2.metric("Valor em Pools", f"${valor_nas_pools:,.2f}", delta=f"{delta_delta_val:+,.2f} ({pct_dia_anterior:+.2f}%) vs ontem")
 else:
