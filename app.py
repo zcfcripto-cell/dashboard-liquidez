@@ -461,11 +461,15 @@ for p in pools:
     p_item["apr_ativo"] = apr_ativo
     pools_processadas.append(p_item)
 
+# Valor estritamente nas pools (capital atual + fees por recolher que continuam na pool, excluindo as fees sacadas que foram retiradas)
+valor_nas_pools = total_valor_atual + total_fees_por_recolher
+
+# Pnl Global contabiliza o valor atual + todas as fees ganhas (incluindo sacadas) menos o investido
 valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
 
-# Obter o valor do dia anterior do histórico de PnL para calcular a variação
+# Obter a variação diária face ao dia anterior utilizando estritamente o valor ativo nas pools (sem fees sacadas)
 hist_pnl_data = get_historico_pnl()
 dif_dia_anterior = 0.0
 pct_dia_anterior = 0.0
@@ -475,7 +479,7 @@ if hist_pnl_data and len(hist_pnl_data) >= 1:
     ultimo_registo = hist_pnl_data[-1]
     valor_anterior = to_float(ultimo_registo.get("valor_total_usd"))
     if valor_anterior > 0:
-        dif_dia_anterior = total_valor_atual - valor_anterior
+        dif_dia_anterior = valor_nas_pools - valor_anterior
         pct_dia_anterior = (dif_dia_anterior / valor_anterior) * 100
         sinal_str = "+" if dif_dia_anterior > 0 else ""
         delta_texto_pools = f"{sinal_str}${dif_dia_anterior:,.2f} ({sinal_str}{pct_dia_anterior:.2f}%) vs ontem"
@@ -484,11 +488,11 @@ if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
     hoje = get_agora_pt().strftime('%Y-%m-%d')
     payload_pnl = {
         "data": hoje,
-        "valor_total_usd": round(valor_total_com_fees, 2)
+        "valor_total_usd": round(valor_nas_pools, 2)
     }
     res = requests.post(f"{SUPABASE_URL}/rest/v1/historico_pnl", headers=headers, json=payload_pnl)
     if res.status_code in [200, 201]:
-        st.sidebar.success(f"Snapshot de {hoje} (${valor_total_com_fees:,.2f}) guardado com hora de PT!")
+        st.sidebar.success(f"Snapshot de {hoje} (${valor_nas_pools:,.2f}) guardado com hora de PT!")
         time.sleep(1)
         st.rerun()
     else:
@@ -498,7 +502,7 @@ if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
     msg_resumo = (
         f"📊 <b>PORTFÓLIO DEFI ({get_agora_pt().strftime('%d/%m/%Y %H:%M')} PT)</b>\n\n"
         f"💰 <b>Investido:</b> ${total_investido:,.2f}\n"
-        f"💵 <b>Atual:</b> ${total_valor_atual:,.2f}\n"
+        f"💵 <b>Atual nas Pools:</b> ${valor_nas_pools:,.2f}\n"
         f"💸 <b>Fees Totais:</b> ${total_fees:,.2f} (${total_fees_sacadas:,.2f} sacadas)\n"
         f"📈 <b>PnL:</b> ${pnl_global:,.2f} ({roi_global:.2f}%)\n"
         f"📌 <b>Ativas:</b> 🟢 {total_ativas} | 🔴 {total_inativas}"
@@ -694,7 +698,7 @@ with col_g2:
             df_hist, 
             x="data", 
             y="valor_total_usd", 
-            title="Evolução do Valor Total ($ USD)",
+            title="Evolução do Valor Total nas Pools ($ USD)",
             markers=True
         )
         fig_hist.update_traces(line_color="#10b981", fillcolor="rgba(16, 185, 129, 0.1)")
