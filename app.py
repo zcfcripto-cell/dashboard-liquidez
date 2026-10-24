@@ -257,7 +257,7 @@ def calcular_dias_metricas(data_str, horas_inativa):
         return 1.0, 1.0
 
 # -----------------------------------------------------------------------------
-# CÁLCULO DE LIQUIDEZ CONCENTRADA (CLMM) E IL DINÂMICO
+# CÁLCULO DE LIQUIDEZ CONCENTRADA (CLMM) E CUSTO MÉDIO
 # -----------------------------------------------------------------------------
 def calcular_peso_clmm(p_atual, r_min, r_max):
     pa = to_float(p_atual)
@@ -310,6 +310,13 @@ def calcular_il_clmm(p_inicial, p_atual, r_min, r_max):
 
     il_pct = ((val_lp / val_hodl) - 1) * 100
     return il_pct
+
+def calcular_custo_medio_inferior(p_inicial, r_min):
+    p_ini = to_float(p_inicial)
+    rmin = to_float(r_min)
+    if p_ini > 0 and rmin > 0:
+        return math.sqrt(p_ini * rmin)
+    return 0.0
 
 def calcular_dias_para_anular_il(il_usd, fees_dia_media):
     if fees_dia_media <= 0 or il_usd <= 0:
@@ -411,6 +418,7 @@ for p in pools:
 
     il_pct = calcular_il_clmm(p_nat_inicial, p_nat_atual, r_min, r_max)
     il_usd = abs(il_pct / 100.0) * v_inv
+    custo_medio_inf = calcular_custo_medio_inferior(p_nat_inicial, r_min)
 
     v_fees_totais_pool = v_fees_sacadas + v_fees_por_recolher
     v_atual_final = v_at if v_at > 0 else v_inv
@@ -450,6 +458,7 @@ for p in pools:
     p_item["fees_calc"] = v_fees_totais_pool
     p_item["il_pct_calc"] = il_pct
     p_item["il_usd_calc"] = il_usd
+    p_item["custo_medio_inf_calc"] = custo_medio_inf
     p_item["dias_cobertura_calc"] = dias_cobertura
     p_item["pnl_pool"] = pnl_pool
     p_item["roi_pool"] = roi_pool
@@ -462,7 +471,6 @@ for p in pools:
     pools_processadas.append(p_item)
 
 valor_nas_pools = total_valor_atual + total_fees_por_recolher
-
 valor_total_com_fees = total_valor_atual + total_fees
 pnl_global = valor_total_com_fees - total_investido
 roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
@@ -563,6 +571,7 @@ else:
         
         il_pct = p["il_pct_calc"]
         il_usd = p["il_usd_calc"]
+        custo_medio_inf = p["custo_medio_inf_calc"]
         dias_cobertura = p["dias_cobertura_calc"]
 
         pnl_pool = p["pnl_pool"]
@@ -577,6 +586,7 @@ else:
 
         tipo_desvio = "EM RANGE"
         motivo_saida = ""
+        is_abaixo_range = False
         if r_max > 0 and p_nat > r_max:
             pct = ((p_nat - r_max) / r_max) * 100
             tipo_desvio = f"+{pct:.2f}% (Acima)"
@@ -584,7 +594,8 @@ else:
         elif r_min > 0 and p_nat < r_min:
             pct = ((r_min - p_nat) / r_min) * 100
             tipo_desvio = f"-{pct:.2f}% (Abaixo)"
-            motivo_saida = "⚠️ Saída pelo limite INFERIOR."
+            is_abaixo_range = True
+            motivo_saida = f"⚠️ Saída pelo limite INFERIOR (100% Volátil). Custo médio de aquisição: {format_crypto_price(custo_medio_inf)}"
 
         if estado == "Ativa":
             badge_html = '<span class="badge-active">🟢 EM RANGE</span>'
@@ -617,12 +628,16 @@ else:
                 c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
                 c_p3.metric("Rendimento Diário", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
-                c_p4.metric(
-                    "Perda Impermanente (IL)", 
-                    f"{il_pct:.2f}% (${il_usd:,.2f})", 
-                    delta=f"{dias_cobertura:.1f} dias p/ anular" if il_usd > 0 else "0 dias", 
-                    delta_color="inverse"
-                )
+                
+                if is_abaixo_range:
+                    c_p4.metric("Custo Médio (Queda)", format_crypto_price(custo_medio_inf), delta="100% Volátil", delta_color="inverse")
+                else:
+                    c_p4.metric(
+                        "Perda Impermanente (IL)", 
+                        f"{il_pct:.2f}% (${il_usd:,.2f})", 
+                        delta=f"{dias_cobertura:.1f} dias p/ anular" if il_usd > 0 else "0 dias", 
+                        delta_color="inverse"
+                    )
 
                 if motivo_saida and estado != "Ativa":
                     st.caption(motivo_saida)
@@ -893,6 +908,7 @@ with tab_table:
             "v_inicial_calc": "Investido ($)",
             "v_atual_calc": "Valor Atual ($)",
             "il_pct_calc": "IL (%)",
+            "custo_medio_inf_calc": "Custo Médio (Queda)",
             "dias_cobertura_calc": "Dias P/ Anular IL",
             "fees_sacadas_calc": "Fees Sacadas ($)",
             "fees_por_recolher_calc": "Fees Por Recolher ($)",
@@ -910,6 +926,8 @@ with tab_table:
         
         if "IL (%)" in df_display.columns:
             df_display["IL (%)"] = df_display["IL (%)"].apply(lambda x: f"{x:.2f}%")
+        if "Custo Médio (Queda)" in df_display.columns:
+            df_display["Custo Médio (Queda)"] = df_display["Custo Médio (Queda)"].apply(lambda x: format_crypto_price(x))
         if "Dias P/ Anular IL" in df_display.columns:
             df_display["Dias P/ Anular IL"] = df_display["Dias P/ Anular IL"].apply(lambda x: f"{x:.1f} dias")
         if "ROI (%)" in df_display.columns:
