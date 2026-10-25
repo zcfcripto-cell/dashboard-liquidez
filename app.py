@@ -262,12 +262,16 @@ def format_crypto_price(val):
     else:
         return f"{v:.4f}"
 
-def calcular_dias_metricas(data_str, horas_inativa):
+def calcular_dias_metricas(data_str, horas_inativa, data_fecho_str=None):
     if not data_str:
         return 1.0, 1.0
     try:
         data_inicio = datetime.strptime(str(data_str).strip(), "%Y-%m-%d").date()
-        hoje_pt = get_agora_pt().date()
+        if data_fecho_str:
+            hoje_pt = datetime.strptime(str(data_fecho_str).strip(), "%Y-%m-%d").date()
+        else:
+            hoje_pt = get_agora_pt().date()
+            
         dias_corridos = max((hoje_pt - data_inicio).days, 1)
         dias_inativos = to_float(horas_inativa) / 24.0
         dias_ativos = max(dias_corridos - dias_inativos, 0.1)
@@ -362,6 +366,9 @@ def calcular_dias_para_anular_il(il_usd, fees_dia_media):
 def sincronizar_pools_silencioso(pools_lista):
     agora = time.time()
     for p in pools_lista:
+        if normalizar_estado(p.get("estado")) == "Fechada":
+            continue
+            
         addr = p.get("wallet_address")
         if addr:
             p_usd, p_nat = fetch_dexscreener_data(addr)
@@ -432,7 +439,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO (QUANTIDADES REAIS DE TOKENS NAS FEES)
+# 5. CÁLCULO DE MÉTRICAS COMPLETO (Estarão separadas Posições Abertas e Fechadas)
 # -----------------------------------------------------------------------------
 total_investido_inicial = 0.0
 total_aportes_extra = 0.0
@@ -448,6 +455,7 @@ total_ativas = 0
 total_inativas = 0
 
 pools_processadas = []
+pools_fechadas_processadas = []
 
 for p in pools:
     pool_id = p.get("id")
@@ -459,6 +467,7 @@ for p in pools:
     v_fees_sacadas = to_float(p.get("fees"))
     v_fees_por_recolher = to_float(p.get("position_pubkey"))
     data_ent = p.get("data_entrada", "")
+    data_fecho = p.get("data_fecho", None)
     hrs_inativa = to_float(p.get("horas_inativa"))
     estado = normalizar_estado(p.get("estado"))
     tipo_proto = identificar_tipo_protocolo(p.get("rede"))
@@ -468,7 +477,6 @@ for p in pools:
     r_min = to_float(p.get("range_min"))
     r_max = to_float(p.get("range_max"))
 
-    # Avaliação em tempo real com base no rácio atual da CLMM
     wa_fees = calcular_peso_clmm(p_nat_atual, r_min, r_max)
     wb_fees = 1.0 - wa_fees
     ratio_preco_fees = (p_nat_atual / p_nat_inicial) if p_nat_inicial > 0 else 1.0
@@ -485,10 +493,16 @@ for p in pools:
     v_fees_totais_pool = v_fees_sacadas_atual + v_fees_por_recolher
     v_atual_final = v_at if v_at > 0 else v_inv_total
 
-    pnl_pool = (v_atual_final + v_fees_totais_pool) - v_inv_total
+    # Se a pool estiver fechada, usa o valor_fecho guardado
+    if estado == "Fechada":
+        v_fecho_real = to_float(p.get("valor_fecho"), v_atual_final)
+        pnl_pool = (v_fecho_real + v_fees_sacadas) - v_inv_total
+    else:
+        pnl_pool = (v_atual_final + v_fees_totais_pool) - v_inv_total
+
     roi_pool = (pnl_pool / v_inv_total * 100) if v_inv_total > 0 else 0.0
 
-    dias_corridos, dias_ativos = calcular_dias_metricas(data_ent, hrs_inativa)
+    dias_corridos, dias_ativos = calcular_dias_metricas(data_ent, hrs_inativa, data_fecho)
     
     fees_dia_corrido = v_fees_totais_pool / dias_corridos
     apr_corrido = ((v_fees_totais_pool / v_inv_total) / dias_corridos * 365 * 100) if v_inv_total > 0 else 0.0
@@ -496,23 +510,10 @@ for p in pools:
     fees_dia_ativo = v_fees_totais_pool / dias_ativos
     apr_ativo = ((v_fees_totais_pool / v_inv_total) / dias_ativos * 365 * 100) if v_inv_total > 0 else 0.0
 
+    # Eficiência do Capital: $ de Fees por dia por cada $1,000 investidos
+    eficiencia_1k = (fees_dia_corrido / v_inv_total * 1000) if v_inv_total > 0 else 0.0
+
     dias_cobertura = calcular_dias_para_anular_il(il_usd, fees_dia_corrido)
-
-    total_investido_inicial += v_inv_inicial
-    total_aportes_extra += v_aportes
-    total_investido_global += v_inv_total
-    total_valor_atual += v_atual_final
-    total_fees_sacadas += v_fees_sacadas
-    total_fees_sacadas_atual += v_fees_sacadas_atual
-    total_fees_por_recolher += v_fees_por_recolher
-    total_fees += v_fees_totais_pool
-    total_fees_diarias_corridas += fees_dia_corrido
-    total_fees_diarias_ativas += fees_dia_ativo
-
-    if estado == "Ativa":
-        total_ativas += 1
-    else:
-        total_inativas += 1
 
     p_item = p.copy()
     p_item["estado"] = estado
@@ -535,9 +536,28 @@ for p in pools:
     p_item["dias_ativos"] = dias_ativos
     p_item["fees_dia_corrido"] = fees_dia_corrido
     p_item["apr_corrido"] = apr_corrido
-    p_item["fees_dia_ativo"] = fees_dia_ativo
-    p_item["apr_ativo"] = apr_ativo
-    pools_processadas.append(p_item)
+    p_item["eficiencia_1k"] = eficiencia_1k
+
+    if estado == "Fechada":
+        pools_fechadas_processadas.append(p_item)
+    else:
+        total_investido_inicial += v_inv_inicial
+        total_aportes_extra += v_aportes
+        total_investido_global += v_inv_total
+        total_valor_atual += v_atual_final
+        total_fees_sacadas += v_fees_sacadas
+        total_fees_sacadas_atual += v_fees_sacadas_atual
+        total_fees_por_recolher += v_fees_por_recolher
+        total_fees += v_fees_totais_pool
+        total_fees_diarias_corridas += fees_dia_corrido
+        total_fees_diarias_ativas += fees_dia_ativo
+
+        if estado == "Ativa":
+            total_ativas += 1
+        else:
+            total_inativas += 1
+
+        pools_processadas.append(p_item)
 
 valor_nas_pools = total_valor_atual + total_fees_por_recolher
 valor_total_com_fees = total_valor_atual + total_fees
@@ -608,7 +628,7 @@ k6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO
+# 7. POSIÇÕES EM MONITORIZAÇÃO (COM EFICIÊNCIA DO CAPITAL)
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -619,7 +639,7 @@ elif filtro_estado == "Fora de Range 🔴":
     pools_filtradas = [p for p in pools_processadas if p.get("estado") == "Inativa"]
 
 if not pools_filtradas:
-    st.info("Nenhuma piscina encontrada com o filtro selecionado.")
+    st.info("Nenhuma piscina ativa encontrada com o filtro selecionado.")
 else:
     for p in pools_filtradas:
         pool_id = p["id"]
@@ -627,7 +647,7 @@ else:
         rede = p.get("rede", "DeFi")
         tipo_proto = p["tipo_proto"]
         estado = p.get("estado", "Ativa")
-        p_nat = to_float(p.get("preco_native") or p.get("preco_nativo"))
+        p_nat = to_float(p.get("preco_nativo"))
         p_usd = to_float(p.get("preco_atual"))
         r_min = to_float(p.get("range_min"))
         r_max = to_float(p.get("range_max"))
@@ -652,8 +672,7 @@ else:
         dias_corridos = p["dias_corridos"]
         fees_dia_corrido = p["fees_dia_corrido"]
         apr_corrido = p["apr_corrido"]
-        
-        hrs_inativa = to_float(p.get("horas_inativa"))
+        eficiencia_1k = p["eficiencia_1k"]
 
         tipo_desvio = "EM RANGE"
         motivo_saida = ""
@@ -700,16 +719,7 @@ else:
                 c_p1.metric("Preço Nativo (Rácio)", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
                 c_p3.metric("Rendimento Diário", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
-                
-                if is_abaixo_range:
-                    c_p4.metric("Custo Médio Real", format_crypto_price(custo_medio_inf), delta="100% Volátil", delta_color="inverse")
-                else:
-                    c_p4.metric(
-                        "Perda Impermanente (IL)", 
-                        f"{il_pct:.2f}% (${il_usd:,.2f})", 
-                        delta=f"{dias_cobertura:.1f} dias p/ anular" if il_usd > 0 else "0 dias", 
-                        delta_color="inverse"
-                    )
+                c_p4.metric("Eficiência do Capital", f"${eficiencia_1k:,.2f} /dia", delta="Por cada $1.000")
 
                 if motivo_saida and estado != "Ativa":
                     st.caption(motivo_saida)
@@ -724,7 +734,6 @@ else:
 
                 col_actions1, col_actions2 = st.columns(2)
                 
-                # Registo de Saque com Gravação de Quantidades na Tabela historico_fees
                 with col_actions1:
                     with st.expander(f"💸 Registo Rápido de Saque — {par}"):
                         val_saque_hoje = st.number_input(
@@ -745,17 +754,15 @@ else:
                                 patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
                                 res_pool = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
                                 
-                                # Calcular quantidades exatas dos tokens no momento do saque
                                 wa_saque = calcular_peso_clmm(p_nat, r_min, r_max)
                                 wb_saque = 1.0 - wa_saque
                                 
                                 val_usd_token_a = val_saque_hoje * wa_saque
                                 val_usd_token_b = val_saque_hoje * wb_saque
                                 
-                                # Converter para quantidade se p_usd e p_nat estiverem disponíveis
                                 p_usd_a = p_usd if p_usd > 0 else 1.0
                                 qtd_a = val_usd_token_a / p_usd_a if p_usd_a > 0 else 0.0
-                                qtd_b = val_usd_token_b # Token B assumido como base/stable ou valor de referência
+                                qtd_b = val_usd_token_b
                                 
                                 payload_historico = {
                                     "data": str(data_saque_hoje),
@@ -768,7 +775,7 @@ else:
                                 res_hist = requests.post(f"{SUPABASE_URL}/rest/v1/historico_fees", headers=headers, json=payload_historico)
 
                                 if res_pool.status_code in [200, 204] and res_hist.status_code in [200, 201]:
-                                    st.success(f"Registadas +${val_saque_hoje:,.2f} em fees (Qtd A: {qtd_a:.4f} | Qtd B: {qtd_b:.2f})!")
+                                    st.success(f"Registadas +${val_saque_hoje:,.2f} em fees!")
                                     time.sleep(1)
                                     st.rerun()
                                 else:
@@ -858,9 +865,10 @@ with col_g2:
 st.markdown("---")
 st.subheader("🛠️ Ferramentas & Gestão")
 
-tab_add, tab_edit, tab_calc, tab_table, tab_fees_hist, tab_aportes_hist, tab_llama = st.tabs([
+tab_add, tab_edit, tab_closed, tab_calc, tab_table, tab_fees_hist, tab_aportes_hist, tab_llama = st.tabs([
     "➕ Adicionar Pool", 
-    "✏ Editar Posição", 
+    "✏ Editar / Fechar Posição", 
+    "🏆 Posições Fechadas",
     "🧮 Calculadora & IL", 
     "📄 Tabela Geral",
     "📜 Histórico de Fees",
@@ -972,6 +980,30 @@ with tab_edit:
                     st.error(f"Erro ao guardar: {res.text}")
 
         st.markdown("---")
+        
+        # Secção de Encerramento/Arquivamento de Posição
+        st.markdown("#### 🏁 Encerrar / Arquivar Posição")
+        with st.form("form_close_pool"):
+            val_fecho_input = st.number_input("Valor Total Sacado ao Fechar ($ USD):", min_value=0.0, value=to_float(pool_sel.get("valor_atual")), step=10.0)
+            data_fecho_input = st.date_input("Data de Fecho:", value=get_agora_pt().date())
+            btn_close_action = st.form_submit_button("🔒 Confirmar e Arquivar Posição")
+
+            if btn_close_action:
+                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+                close_payload = {
+                    "estado": "Fechada",
+                    "valor_fecho": val_fecho_input,
+                    "data_fecho": str(data_fecho_input)
+                }
+                res_c = requests.patch(patch_url, headers=headers, json=close_payload)
+                if res_c.status_code in [200, 204]:
+                    st.success(f"Posição ID {pool_sel['id']} encerrada e movida para o histórico!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao fechar posição: {res_c.text}")
+
+        st.markdown("---")
         st.markdown("#### 🚨 Eliminar Posição")
         if st.button(f"🗑️ Eliminar Permanente ID {pool_sel['id']}", type="primary", use_container_width=True):
             del_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
@@ -982,6 +1014,49 @@ with tab_edit:
                 st.rerun()
             else:
                 st.error("Erro ao eliminar a pool.")
+
+with tab_closed:
+    st.markdown("#### 🏆 Histórico de Posições Fechadas (PnL Realizado)")
+    if pools_fechadas_processadas:
+        total_pnl_fechado = sum(p["pnl_pool"] for p in pools_fechadas_processadas)
+        total_pools_fechadas = len(pools_fechadas_processadas)
+        winning_pools = sum(1 for p in pools_fechadas_processadas if p["pnl_pool"] > 0)
+        win_rate = (winning_pools / total_pools_fechadas * 100) if total_pools_fechadas > 0 else 0.0
+        duracao_media = sum(p["dias_corridos"] for p in pools_fechadas_processadas) / total_pools_fechadas
+
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc1.metric("PnL Realizado Total", f"${total_pnl_fechado:,.2f}")
+        mc2.metric("Win Rate", f"{win_rate:.1f}%", delta=f"{winning_pools}/{total_pools_fechadas} Lucrativas")
+        mc3.metric("Total Pools Fechadas", f"{total_pools_fechadas}")
+        mc4.metric("Duração Média", f"{duracao_media:.1f} dias")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        df_closed = pd.DataFrame(pools_fechadas_processadas)
+        cols_closed_display = {
+            "id": "ID",
+            "par": "Par",
+            "rede": "Rede / Plataforma",
+            "v_inicial_calc": "Capital Investido ($)",
+            "fees_sacadas_calc": "Fees Sacadas ($)",
+            "pnl_pool": "PnL Realizado ($)",
+            "roi_pool": "ROI Realizado (%)",
+            "dias_corridos": "Duração (Dias)"
+        }
+        
+        existing_cols = [c for c in cols_closed_display.keys() if c in df_closed.columns]
+        df_closed_show = df_closed[existing_cols].rename(columns=cols_closed_display)
+        
+        for col in ["Capital Investido ($)", "Fees Sacadas ($)", "PnL Realizado ($)"]:
+            if col in df_closed_show.columns:
+                df_closed_show[col] = df_closed_show[col].apply(lambda x: f"${x:,.2f}")
+        
+        if "ROI Realizado (%)" in df_closed_show.columns:
+            df_closed_show["ROI Realizado (%)"] = df_closed_show["ROI Realizado (%)"].apply(lambda x: f"{x:.2f}%")
+            
+        st.dataframe(df_closed_show, use_container_width=True, hide_index=True)
+    else:
+        st.info("Ainda não existem posições arquivadas como 'Fechadas'.")
 
 with tab_calc:
     col_c1, col_c2 = st.columns(2)
@@ -1032,9 +1107,9 @@ with tab_table:
             "v_aportes_calc": "Aportes ($)",
             "v_inicial_calc": "Capital Total ($)",
             "v_atual_calc": "Valor Atual ($)",
+            "eficiencia_1k": "Eficiência ($/dia por $1k)",
             "il_pct_calc": "IL (%)",
             "custo_medio_inf_calc": "Custo Médio Real (Queda)",
-            "dias_cobertura_calc": "Dias P/ Anular IL",
             "fees_sacadas_calc": "Fees Sacadas ($)",
             "fees_sacadas_atual_calc": "Fees Sacadas (Atual $)",
             "fees_por_recolher_calc": "Fees Por Recolher ($)",
@@ -1050,19 +1125,19 @@ with tab_table:
             if col in df_display.columns:
                 df_display[col] = df_display[col].apply(lambda x: f"${x:,.2f}")
         
+        if "Eficiência ($/dia por $1k)" in df_display.columns:
+            df_display["Eficiência ($/dia por $1k)"] = df_display["Eficiência ($/dia por $1k)"].apply(lambda x: f"${x:,.2f}")
         if "IL (%)" in df_display.columns:
             df_display["IL (%)"] = df_display["IL (%)"].apply(lambda x: f"{x:.2f}%")
         if "Custo Médio Real (Queda)" in df_display.columns:
             df_display["Custo Médio Real (Queda)"] = df_display["Custo Médio Real (Queda)"].apply(lambda x: format_crypto_price(x))
-        if "Dias P/ Anular IL" in df_display.columns:
-            df_display["Dias P/ Anular IL"] = df_display["Dias P/ Anular IL"].apply(lambda x: f"{x:.1f} dias")
         if "ROI (%)" in df_display.columns:
             df_display["ROI (%)"] = df_display["ROI (%)"].apply(lambda x: f"{x:.2f}%")
 
         df_display = df_display.fillna("")
         st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
-        st.info("Nenhuma posição registada na base de dados.")
+        st.info("Nenhuma posição ativa registada na base de dados.")
 
 with tab_fees_hist:
     st.markdown("#### 📜 Registo Histórico de Saques de Fees")
