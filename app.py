@@ -109,6 +109,15 @@ def normalizar_estado(estado_raw):
         return "Inativa"
     return "Ativa"
 
+def identificar_tipo_protocolo(rede_str):
+    r = str(rede_str or "").lower()
+    if "meteora" in r or "dlmm" in r:
+        return "DLMM (Meteora)"
+    elif "uniswap" in r:
+        return "CLMM (Uniswap v3)"
+    else:
+        return "CLMM (Raydium/Outros)"
+
 def send_telegram(message):
     bot_token = get_secret(["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN"])
     chat_id = get_secret("TELEGRAM_CHAT_ID")
@@ -205,7 +214,6 @@ def get_pools():
     return []
 
 def get_aportes():
-    """Obtém o histórico de aportes da tabela 'aportes' do Supabase."""
     url = f"{SUPABASE_URL}/rest/v1/aportes?select=*&order=data_aporte.desc,id.desc"
     try:
         res = requests.get(url, headers=headers, timeout=10)
@@ -268,7 +276,7 @@ def calcular_dias_metricas(data_str, horas_inativa):
         return 1.0, 1.0
 
 # -----------------------------------------------------------------------------
-# CÁLCULO DE LIQUIDEZ CONCENTRADA (CLMM) E CUSTO MÉDIO RIGOROSO
+# CÁLCULO DE LIQUIDEZ CONCENTRADA (CLMM / DLMM) E CUSTO MÉDIO
 # -----------------------------------------------------------------------------
 def calcular_peso_clmm(p_atual, r_min, r_max):
     pa = to_float(p_atual)
@@ -323,7 +331,6 @@ def calcular_il_clmm(p_inicial, p_atual, r_min, r_max):
     return il_pct
 
 def calcular_custo_medio_inferior_rigoroso(p_inicial, r_min, r_max):
-    """Custo médio real considerando P_ini, R_min e R_max na liquidez concentrada."""
     p_ini = to_float(p_inicial)
     rmin = to_float(r_min)
     rmax = to_float(r_max)
@@ -400,7 +407,6 @@ def sincronizar_pools_silencioso(pools_lista):
 pools = get_pools()
 lista_aportes_raw = get_aportes()
 
-# Mapear e somar aportes por pool_id
 mapa_aportes = {}
 for a in lista_aportes_raw:
     pid = a.get("pool_id")
@@ -446,8 +452,6 @@ for p in pools:
     pool_id = p.get("id")
     v_inv_inicial = to_float(p.get("valor_inicial"))
     v_aportes = mapa_aportes.get(pool_id, 0.0)
-    
-    # Capital Total Investido = Inicial + Aportes Extra
     v_inv_total = v_inv_inicial + v_aportes
 
     v_at = to_float(p.get("valor_atual"))
@@ -456,6 +460,7 @@ for p in pools:
     data_ent = p.get("data_entrada", "")
     hrs_inativa = to_float(p.get("horas_inativa"))
     estado = normalizar_estado(p.get("estado"))
+    tipo_proto = identificar_tipo_protocolo(p.get("rede"))
 
     p_nat_atual = to_float(p.get("preco_nativo"))
     p_nat_inicial = to_float(p.get("preco_inicial"))
@@ -469,7 +474,6 @@ for p in pools:
     v_fees_totais_pool = v_fees_sacadas + v_fees_por_recolher
     v_atual_final = v_at if v_at > 0 else v_inv_total
 
-    # PnL com base no Investimento Total (Inicial + Aportes)
     pnl_pool = (v_atual_final + v_fees_totais_pool) - v_inv_total
     roi_pool = (pnl_pool / v_inv_total * 100) if v_inv_total > 0 else 0.0
 
@@ -500,6 +504,7 @@ for p in pools:
 
     p_item = p.copy()
     p_item["estado"] = estado
+    p_item["tipo_proto"] = tipo_proto
     p_item["v_inicial_puro"] = v_inv_inicial
     p_item["v_aportes_calc"] = v_aportes
     p_item["v_inicial_calc"] = v_inv_total
@@ -607,6 +612,7 @@ else:
         pool_id = p["id"]
         par = p.get("par", "Par N/A")
         rede = p.get("rede", "DeFi")
+        tipo_proto = p["tipo_proto"]
         estado = p.get("estado", "Ativa")
         p_nat = to_float(p.get("preco_nativo"))
         p_usd = to_float(p.get("preco_atual"))
@@ -649,10 +655,10 @@ else:
             motivo_saida = f"⚠️ Saída pelo limite INFERIOR (100% Volátil). Custo médio real de aquisição: {format_crypto_price(custo_medio_inf)}"
 
         if estado == "Ativa":
-            badge_html = '<span class="badge-active">🟢 EM RANGE</span>'
+            badge_html = f'<span class="badge-active">🟢 EM RANGE ({tipo_proto})</span>'
             card_class = "pool-card pool-card-active"
         else:
-            badge_html = f'<span class="badge-inactive">🔴 FORA ({tipo_desvio} | {hrs_inativa:.1f}h)</span>'
+            badge_html = f'<span class="badge-inactive">🔴 FORA ({tipo_desvio} | {tipo_proto})</span>'
             card_class = "pool-card pool-card-inactive"
 
         dif_valor = v_at - v_inv_total
@@ -677,7 +683,7 @@ else:
 
             if not esconder_detalhes:
                 c_p1, c_p2, c_p3, c_p4 = st.columns(4)
-                c_p1.metric("Preço Nativo", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
+                c_p1.metric("Preço Nativo (Rácio)", format_crypto_price(p_nat), delta=f"${p_usd:.4f}" if p_usd > 0 else None)
                 c_p2.metric("Range Definição", f"{format_crypto_price(r_min)} - {format_crypto_price(r_max)}")
                 c_p3.metric("Rendimento Diário", f"${fees_dia_corrido:,.2f}/d", delta=f"{apr_corrido:.1f}% APR")
                 
@@ -704,7 +710,6 @@ else:
 
                 col_actions1, col_actions2 = st.columns(2)
                 
-                # Registo Rápido de Saques
                 with col_actions1:
                     with st.expander(f"💸 Registo Rápido de Saque — {par}"):
                         val_saque_hoje = st.number_input(
@@ -740,7 +745,6 @@ else:
                                 else:
                                     st.error("Erro ao atualizar o Supabase.")
 
-                # Registo Rápido de Aportes
                 with col_actions2:
                     with st.expander(f"➕ Registar Aporte / Reinvestimento — {par}"):
                         val_aporte_hoje = st.number_input(
@@ -765,7 +769,7 @@ else:
                                 res_ap = requests.post(f"{SUPABASE_URL}/rest/v1/aportes", headers=headers, json=payload_aporte)
 
                                 if res_ap.status_code in [200, 201]:
-                                    st.success(f"Aporte de +${val_aporte_hoje:,.2f} registado com sucesso na tabela 'aportes'!")
+                                    st.success(f"Aporte de +${val_aporte_hoje:,.2f} registado com sucesso!")
                                     time.sleep(1)
                                     st.rerun()
                                 else:
@@ -840,11 +844,11 @@ with tab_add:
         c1, c2, c3 = st.columns(3)
         par_in = c1.text_input("Par (ex: SOL/USDC)", "")
         addr_in = c2.text_input("Pair Address (DexScreener)", "")
-        rede_in = c3.text_input("Rede / Plataforma (ex: Raydium - SOLANA)", "Raydium - SOLANA")
+        rede_in = c3.text_input("Rede / Plataforma (ex: Raydium - CLMM / Meteora - DLMM)", "Raydium - CLMM")
 
         c4, c5, c6 = st.columns(3)
         invest_in = c4.number_input("Investimento Inicial ($ USD)", min_value=0.0, step=10.0)
-        p_nat_inicial_in = c5.number_input("Preço Nativo Inicial", min_value=0.0, format="%.8f")
+        p_nat_inicial_in = c5.number_input("Preço Nativo Inicial (Rácio)", min_value=0.0, format="%.8f")
         v_atual_in = c6.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
 
         c7, c8, c9 = st.columns(3)
@@ -965,7 +969,7 @@ with tab_calc:
             st.write(f"**Novo Range Máximo (+{var_pct}%):** `{format_crypto_price(novo_max)}`")
 
     with col_c2:
-        st.markdown("#### 📉 Simulador de IL CLMM (Gama Concentrada)")
+        st.markdown("#### 📉 Simulador de IL CLMM / DLMM")
         var_preco_simulada = st.slider("Variação de Preço (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0, key="calc_il_slider")
         rmin_sim = st.number_input("Range Mínimo (Simulação)", value=0.000030, format="%.8f")
         rmax_sim = st.number_input("Range Máximo (Simulação)", value=0.000080, format="%.8f")
@@ -984,7 +988,7 @@ with tab_calc:
             v_l = razao_sim ** wa_sim
             il_res = ((v_l / v_h) - 1) * 100 if v_h > 0 else 0.0
 
-        st.metric("IL Estimada (CLMM)", f"{il_res:.2f}%", delta=f"Peso Token A: {wa_sim*100:.1f}%", delta_color="inverse")
+        st.metric("IL Estimada", f"{il_res:.2f}%", delta=f"Peso Token A: {wa_sim*100:.1f}%", delta_color="inverse")
 
 with tab_table:
     if pools_processadas:
@@ -1049,8 +1053,6 @@ with tab_aportes_hist:
     st.markdown("#### ➕ Registo Histórico de Aportes")
     if lista_aportes_raw:
         df_ap = pd.DataFrame(lista_aportes_raw)
-        
-        # Mapear nome da pool se possível
         mapa_nomes_pools = {p["id"]: p.get("par", f"Pool ID {p['id']}") for p in pools}
         df_ap["par"] = df_ap["pool_id"].apply(lambda x: mapa_nomes_pools.get(x, f"Pool ID {x}"))
         
@@ -1103,7 +1105,7 @@ with tab_llama:
         }
         
         df_show = df_filtered[list(cols_map.keys())].rename(columns=cols_map)
-        df_show["TVL ($)"] = df_show["TVL ($)"] .apply(lambda x: f"${x:,.0f}")
+        df_show["TVL ($)"] = df_show["TVL ($)"].apply(lambda x: f"${x:,.0f}")
         df_show["APY Total (%)"] = df_show["APY Total (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
 
         st.dataframe(
