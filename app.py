@@ -432,7 +432,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO (COM VALORIZAÇÃO DINÂMICA DAS FEES)
+# 5. CÁLCULO DE MÉTRICAS COMPLETO (QUANTIDADES REAIS DE TOKENS NAS FEES)
 # -----------------------------------------------------------------------------
 total_investido_inicial = 0.0
 total_aportes_extra = 0.0
@@ -468,7 +468,7 @@ for p in pools:
     r_min = to_float(p.get("range_min"))
     r_max = to_float(p.get("range_max"))
 
-    # Cálculo dinâmico do valor atual das fees sacadas na carteira via CLMM
+    # Avaliação em tempo real com base no rácio atual da CLMM
     wa_fees = calcular_peso_clmm(p_nat_atual, r_min, r_max)
     wb_fees = 1.0 - wa_fees
     ratio_preco_fees = (p_nat_atual / p_nat_inicial) if p_nat_inicial > 0 else 1.0
@@ -627,7 +627,7 @@ else:
         rede = p.get("rede", "DeFi")
         tipo_proto = p["tipo_proto"]
         estado = p.get("estado", "Ativa")
-        p_nat = to_float(p.get("preco_nativo"))
+        p_nat = to_float(p.get("preco_native") or p.get("preco_nativo"))
         p_usd = to_float(p.get("preco_atual"))
         r_min = to_float(p.get("range_min"))
         r_max = to_float(p.get("range_max"))
@@ -724,6 +724,7 @@ else:
 
                 col_actions1, col_actions2 = st.columns(2)
                 
+                # Registo de Saque com Gravação de Quantidades na Tabela historico_fees
                 with col_actions1:
                     with st.expander(f"💸 Registo Rápido de Saque — {par}"):
                         val_saque_hoje = st.number_input(
@@ -744,16 +745,30 @@ else:
                                 patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
                                 res_pool = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
                                 
+                                # Calcular quantidades exatas dos tokens no momento do saque
+                                wa_saque = calcular_peso_clmm(p_nat, r_min, r_max)
+                                wb_saque = 1.0 - wa_saque
+                                
+                                val_usd_token_a = val_saque_hoje * wa_saque
+                                val_usd_token_b = val_saque_hoje * wb_saque
+                                
+                                # Converter para quantidade se p_usd e p_nat estiverem disponíveis
+                                p_usd_a = p_usd if p_usd > 0 else 1.0
+                                qtd_a = val_usd_token_a / p_usd_a if p_usd_a > 0 else 0.0
+                                qtd_b = val_usd_token_b # Token B assumido como base/stable ou valor de referência
+                                
                                 payload_historico = {
                                     "data": str(data_saque_hoje),
                                     "pool_id": pool_id,
                                     "par": par,
-                                    "valor_usd": round(val_saque_hoje, 2)
+                                    "valor_usd": round(val_saque_hoje, 2),
+                                    "qtd_token_a": round(qtd_a, 6),
+                                    "qtd_token_b": round(qtd_b, 4)
                                 }
                                 res_hist = requests.post(f"{SUPABASE_URL}/rest/v1/historico_fees", headers=headers, json=payload_historico)
 
                                 if res_pool.status_code in [200, 204] and res_hist.status_code in [200, 201]:
-                                    st.success(f"Registadas +${val_saque_hoje:,.2f} em fees!")
+                                    st.success(f"Registadas +${val_saque_hoje:,.2f} em fees (Qtd A: {qtd_a:.4f} | Qtd B: {qtd_b:.2f})!")
                                     time.sleep(1)
                                     st.rerun()
                                 else:
@@ -1054,10 +1069,18 @@ with tab_fees_hist:
     fees_hist_data = get_historico_fees()
     if fees_hist_data:
         df_fees_hist = pd.DataFrame(fees_hist_data)
-        df_fees_hist = df_fees_hist[["data", "par", "valor_usd"]].rename(columns={
+        cols_hist = ["data", "par", "valor_usd"]
+        if "qtd_token_a" in df_fees_hist.columns:
+            cols_hist.append("qtd_token_a")
+        if "qtd_token_b" in df_fees_hist.columns:
+            cols_hist.append("qtd_token_b")
+            
+        df_fees_hist = df_fees_hist[cols_hist].rename(columns={
             "data": "Data do Saque",
             "par": "Par / Pool",
-            "valor_usd": "Valor Sacado ($ USD)"
+            "valor_usd": "Valor Sacado ($ USD)",
+            "qtd_token_a": "Qtd Token Volátil",
+            "qtd_token_b": "Qtd Token Base"
         })
         df_fees_hist["Valor Sacado ($ USD)"] = df_fees_hist["Valor Sacado ($ USD)"].apply(lambda x: f"${x:,.2f}")
         st.dataframe(df_fees_hist, use_container_width=True, hide_index=True)
