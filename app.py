@@ -853,7 +853,7 @@ else:
 # -----------------------------------------------------------------------------
 # 8. GRÁFICOS DE ANÁLISE DO PORTFÓLIO (ATIVAS)
 # -----------------------------------------------------------------------------
-st.subheader("📊 Análise do Portfólio")
+st.subheader("📊 Análise do Portfólio (Ativas)")
 col_g1, col_g2 = st.columns(2)
 
 with col_g1:
@@ -896,7 +896,6 @@ with col_g2:
     else:
         st.info("A aguardar histórico de PnL...")
 
-# Gráfico de Performance (PnL) Individual por Pool Ativa
 if pools_processadas:
     df_active_perf = pd.DataFrame(pools_processadas)
     fig_active_perf = px.bar(
@@ -921,7 +920,50 @@ if pools_processadas:
     st.plotly_chart(fig_active_perf, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 9. FERRAMENTAS & GESTÃO DE POOLS
+# 9. RAIO-X DETALHADO POR POOL (FEE BREAKDOWN INTERATIVO)
+# -----------------------------------------------------------------------------
+st.markdown("---")
+st.subheader("🔍 Raio-X Detalhado por Pool (Histórico de Saques de Fees)")
+
+todas_pools_combinadas = pools_processadas + pools_fechadas_processadas
+if todas_pools_combinadas:
+    mapa_selecao_pools = {f"ID {p['id']} - {p.get('par')} ({p.get('estado')})": p for p in todas_pools_combinadas}
+    pool_escolhida_str = st.selectbox("Selecione uma pool para inspecionar os saques de fees:", list(mapa_selecao_pools.keys()))
+    pool_raiox = mapa_selecao_pools[pool_escolhida_str]
+    
+    # Filtrar o histórico de fees para esta pool específica
+    fees_hist_raw = get_historico_fees()
+    fees_pool_filtradas = [f for f in fees_hist_raw if f.get("pool_id") == pool_raiox["id"]]
+    
+    if fees_pool_filtradas:
+        df_fees_raiox = pd.DataFrame(fees_pool_filtradas)
+        fig_raiox = px.bar(
+            df_fees_raiox,
+            x="data",
+            y="valor_usd",
+            title=f"Histórico de Saques de Fees — {pool_raiox.get('par')}",
+            text=df_fees_raiox["valor_usd"].apply(lambda x: f"${x:,.2f}"),
+            color="valor_usd",
+            color_continuous_scale=["#38bdf8", "#10b981"]
+        )
+        fig_raiox.update_traces(textposition="outside")
+        fig_raiox.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="white",
+            margin=dict(l=10, r=10, t=40, b=10),
+            xaxis_title="Data do Saque",
+            yaxis_title="Valor Sacado ($ USD)",
+            coloraxis_showscale=False
+        )
+        st.plotly_chart(fig_raiox, use_container_width=True)
+    else:
+        st.info(f"Ainda não existem saques de fees registados para a pool {pool_raiox.get('par')}.")
+else:
+    st.info("Nenhuma pool disponível para análise.")
+
+# -----------------------------------------------------------------------------
+# 10. FERRAMENTAS & GESTÃO DE POOLS
 # -----------------------------------------------------------------------------
 st.markdown("---")
 st.subheader("🛠️ Ferramentas & Gestão")
@@ -1092,7 +1134,6 @@ with tab_closed:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Gráfico Exclusivo de Performance (PnL Realizado) das Pools Fechadas
         df_closed_perf = pd.DataFrame(pools_fechadas_processadas)
         fig_closed_perf = px.bar(
             df_closed_perf,
