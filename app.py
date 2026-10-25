@@ -634,7 +634,7 @@ else:
                     {badge_html}
                 </div>
                 <div style="font-size: 0.9rem; color: #cbd5e1; display: flex; gap: 16px; border-top: 1px solid #2d3748; padding-top: 6px;">
-                    <span>📥 <b>Entrada:</b> ${v_inv:,.2f}</span>
+                    <span>📥 <b>Aporte / Inicial:</b> ${v_inv:,.2f}</span>
                     <span>💵 <b>Atual:</b> ${v_at:,.2f}</span>
                     <span>📊 <b>Dif:</b> <span style="color: {cor_dif};">{sinal_dif}${dif_valor:,.2f}</span></span>
                 </div>
@@ -773,7 +773,7 @@ with tab_add:
         rede_in = c3.text_input("Rede / Plataforma (ex: Raydium - SOLANA)", "Raydium - SOLANA")
 
         c4, c5, c6 = st.columns(3)
-        invest_in = c4.number_input("Valor Inicial ($ USD)", min_value=0.0, step=10.0)
+        invest_in = c4.number_input("Aporte / Investimento Inicial ($ USD)", min_value=0.0, step=10.0)
         p_nat_inicial_in = c5.number_input("Preço Nativo Inicial", min_value=0.0, format="%.8f")
         v_atual_in = c6.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
 
@@ -831,9 +831,10 @@ with tab_edit:
 
             e_rede = st.text_input("Rede / Plataforma", value=str(pool_sel.get("rede", "")))
 
-            e1, e2 = st.columns(2)
+            e1, e2, e_inv = st.columns(3)
             e_val_atual = e1.number_input("Valor Atual Posição ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
             e_pnat_inicial = e2.number_input("Preço Nativo Inicial", value=to_float(pool_sel.get("preco_inicial")), format="%.8f")
+            e_val_inicial = e_inv.number_input("Investimento Inicial / Aportes ($)", value=to_float(pool_sel.get("valor_inicial")), step=10.0)
 
             e3, e4, e5 = st.columns(3)
             e_fees_sacadas = e3.number_input("Fees Já Sacadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
@@ -852,6 +853,7 @@ with tab_edit:
                     "rede": e_rede,
                     "valor_atual": e_val_atual,
                     "preco_inicial": e_pnat_inicial,
+                    "valor_inicial": e_val_inicial,
                     "fees": e_fees_sacadas,
                     "position_pubkey": str(e_fees_por_recolher),
                     "data_entrada": e_data_ent,
