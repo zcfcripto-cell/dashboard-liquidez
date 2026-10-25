@@ -920,7 +920,7 @@ if pools_processadas:
     st.plotly_chart(fig_active_perf, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 9. RAIO-X DETALHADO POR POOL (FEE BREAKDOWN INTERATIVO)
+# 9. RAIO-X DETALHADO POR POOL (FEE BREAKDOWN INTERATIVO COM FILTROS E CSV)
 # -----------------------------------------------------------------------------
 st.markdown("---")
 st.subheader("🔍 Raio-X Detalhado por Pool (Histórico de Saques de Fees)")
@@ -928,12 +928,27 @@ st.subheader("🔍 Raio-X Detalhado por Pool (Histórico de Saques de Fees)")
 todas_pools_combinadas = pools_processadas + pools_fechadas_processadas
 if todas_pools_combinadas:
     mapa_selecao_pools = {f"ID {p['id']} - {p.get('par')} ({p.get('estado')})": p for p in todas_pools_combinadas}
-    pool_escolhida_str = st.selectbox("Selecione uma pool para inspecionar os saques de fees:", list(mapa_selecao_pools.keys()))
+    
+    c_rx1, c_rx2, c_rx3 = st.columns(3)
+    pool_escolhida_str = c_rx1.selectbox("Selecione uma pool:", list(mapa_selecao_pools.keys()))
     pool_raiox = mapa_selecao_pools[pool_escolhida_str]
     
-    # Filtrar o histórico de fees para esta pool específica
+    dt_inicio = c_rx2.date_input("Data Inicial:", value=date(2025, 1, 1), key="rx_dt_ini")
+    dt_fim = c_rx3.date_input("Data Final:", value=get_agora_pt().date(), key="rx_dt_fim")
+    
+    # Filtrar o histórico de fees para esta pool e intervalo de datas
     fees_hist_raw = get_historico_fees()
-    fees_pool_filtradas = [f for f in fees_hist_raw if f.get("pool_id") == pool_raiox["id"]]
+    fees_pool_filtradas = []
+    
+    for f in fees_hist_raw:
+        if f.get("pool_id") == pool_raiox["id"]:
+            data_f_str = str(f.get("data", "")).strip()
+            try:
+                dt_f = datetime.strptime(data_f_str, "%Y-%m-%d").date()
+                if dt_inicio <= dt_f <= dt_fim:
+                    fees_pool_filtradas.append(f)
+            except Exception:
+                fees_pool_filtradas.append(f)
     
     if fees_pool_filtradas:
         df_fees_raiox = pd.DataFrame(fees_pool_filtradas)
@@ -941,7 +956,7 @@ if todas_pools_combinadas:
             df_fees_raiox,
             x="data",
             y="valor_usd",
-            title=f"Histórico de Saques de Fees — {pool_raiox.get('par')}",
+            title=f"Histórico de Saques de Fees — {pool_raiox.get('par')} ({dt_inicio.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')})",
             text=df_fees_raiox["valor_usd"].apply(lambda x: f"${x:,.2f}"),
             color="valor_usd",
             color_continuous_scale=["#38bdf8", "#10b981"]
@@ -957,8 +972,18 @@ if todas_pools_combinadas:
             coloraxis_showscale=False
         )
         st.plotly_chart(fig_raiox, use_container_width=True)
+
+        # Botão para exportação em CSV
+        csv_data = df_fees_raiox.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label=f"📥 Exportar Saques de {pool_raiox.get('par')} para CSV",
+            data=csv_data,
+            file_name=f"saques_fees_pool_{pool_raiox['id']}_{dt_inicio}_a_{dt_fim}.csv",
+            mime="text/csv",
+            use_container_width=False
+        )
     else:
-        st.info(f"Ainda não existem saques de fees registados para a pool {pool_raiox.get('par')}.")
+        st.info(f"Nenhum saque de fees encontrado para a pool {pool_raiox.get('par')} no período selecionado.")
 else:
     st.info("Nenhuma pool disponível para análise.")
 
