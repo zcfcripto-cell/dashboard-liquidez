@@ -204,6 +204,17 @@ def get_pools():
         pass
     return []
 
+def get_aportes():
+    """Obtém o histórico de aportes da tabela 'aportes' do Supabase."""
+    url = f"{SUPABASE_URL}/rest/v1/aportes?select=*&order=data_aporte.desc,id.desc"
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    return []
+
 def get_historico_pnl():
     url = f"{SUPABASE_URL}/rest/v1/historico_pnl?select=*&order=data.asc"
     try:
@@ -387,6 +398,15 @@ def sincronizar_pools_silencioso(pools_lista):
 # 4. CARREGAMENTO E AUTO-SYNC
 # -----------------------------------------------------------------------------
 pools = get_pools()
+lista_aportes_raw = get_aportes()
+
+# Mapear e somar aportes por pool_id
+mapa_aportes = {}
+for a in lista_aportes_raw:
+    pid = a.get("pool_id")
+    v_ap = to_float(a.get("valor"))
+    if pid is not None:
+        mapa_aportes[pid] = mapa_aportes.get(pid, 0.0) + v_ap
 
 if "last_auto_sync" not in st.session_state or (time.time() - st.session_state["last_auto_sync"] > 180):
     sincronizar_pools_silencioso(pools)
@@ -408,7 +428,9 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
 # -----------------------------------------------------------------------------
 # 5. CÁLCULO DE MÉTRICAS COMPLETO
 # -----------------------------------------------------------------------------
-total_investido = 0.0
+total_investido_inicial = 0.0
+total_aportes_extra = 0.0
+total_investido_global = 0.0
 total_valor_atual = 0.0
 total_fees_sacadas = 0.0
 total_fees_por_recolher = 0.0
@@ -421,7 +443,13 @@ total_inativas = 0
 pools_processadas = []
 
 for p in pools:
-    v_inv = to_float(p.get("valor_inicial"))
+    pool_id = p.get("id")
+    v_inv_inicial = to_float(p.get("valor_inicial"))
+    v_aportes = mapa_aportes.get(pool_id, 0.0)
+    
+    # Capital Total Investido = Inicial + Aportes Extra
+    v_inv_total = v_inv_inicial + v_aportes
+
     v_at = to_float(p.get("valor_atual"))
     v_fees_sacadas = to_float(p.get("fees"))
     v_fees_por_recolher = to_float(p.get("position_pubkey"))
@@ -435,26 +463,29 @@ for p in pools:
     r_max = to_float(p.get("range_max"))
 
     il_pct = calcular_il_clmm(p_nat_inicial, p_nat_atual, r_min, r_max)
-    il_usd = abs(il_pct / 100.0) * v_inv
+    il_usd = abs(il_pct / 100.0) * v_inv_total
     custo_medio_inf = calcular_custo_medio_inferior_rigoroso(p_nat_inicial, r_min, r_max)
 
     v_fees_totais_pool = v_fees_sacadas + v_fees_por_recolher
-    v_atual_final = v_at if v_at > 0 else v_inv
+    v_atual_final = v_at if v_at > 0 else v_inv_total
 
-    pnl_pool = (v_atual_final + v_fees_totais_pool) - v_inv
-    roi_pool = (pnl_pool / v_inv * 100) if v_inv > 0 else 0.0
+    # PnL com base no Investimento Total (Inicial + Aportes)
+    pnl_pool = (v_atual_final + v_fees_totais_pool) - v_inv_total
+    roi_pool = (pnl_pool / v_inv_total * 100) if v_inv_total > 0 else 0.0
 
     dias_corridos, dias_ativos = calcular_dias_metricas(data_ent, hrs_inativa)
     
     fees_dia_corrido = v_fees_totais_pool / dias_corridos
-    apr_corrido = ((v_fees_totais_pool / v_inv) / dias_corridos * 365 * 100) if v_inv > 0 else 0.0
+    apr_corrido = ((v_fees_totais_pool / v_inv_total) / dias_corridos * 365 * 100) if v_inv_total > 0 else 0.0
 
     fees_dia_ativo = v_fees_totais_pool / dias_ativos
-    apr_ativo = ((v_fees_totais_pool / v_inv) / dias_ativos * 365 * 100) if v_inv > 0 else 0.0
+    apr_ativo = ((v_fees_totais_pool / v_inv_total) / dias_ativos * 365 * 100) if v_inv_total > 0 else 0.0
 
     dias_cobertura = calcular_dias_para_anular_il(il_usd, fees_dia_corrido)
 
-    total_investido += v_inv
+    total_investido_inicial += v_inv_inicial
+    total_aportes_extra += v_aportes
+    total_investido_global += v_inv_total
     total_valor_atual += v_atual_final
     total_fees_sacadas += v_fees_sacadas
     total_fees_por_recolher += v_fees_por_recolher
@@ -469,7 +500,9 @@ for p in pools:
 
     p_item = p.copy()
     p_item["estado"] = estado
-    p_item["v_inicial_calc"] = v_inv
+    p_item["v_inicial_puro"] = v_inv_inicial
+    p_item["v_aportes_calc"] = v_aportes
+    p_item["v_inicial_calc"] = v_inv_total
     p_item["v_atual_calc"] = v_atual_final
     p_item["fees_sacadas_calc"] = v_fees_sacadas
     p_item["fees_por_recolher_calc"] = v_fees_por_recolher
@@ -490,16 +523,14 @@ for p in pools:
 
 valor_nas_pools = total_valor_atual + total_fees_por_recolher
 valor_total_com_fees = total_valor_atual + total_fees
-pnl_global = valor_total_com_fees - total_investido
-roi_global = (pnl_global / total_investido * 100) if total_investido > 0 else 0.0
+pnl_global = valor_total_com_fees - total_investido_global
+roi_global = (pnl_global / total_investido_global * 100) if total_investido_global > 0 else 0.0
 
-# Obter variação diária filtrando estritamente por dias anteriores a hoje
 hoje_str = get_agora_pt().strftime('%Y-%m-%d')
 hist_pnl_data = get_historico_pnl()
 dif_dia_anterior = 0.0
 pct_dia_anterior = 0.0
 delta_delta_val = None
-delta_texto_pools = "Sem histórico anterior"
 
 if hist_pnl_data:
     registos_anteriores = [r for r in hist_pnl_data if str(r.get("data")) < hoje_str]
@@ -527,7 +558,7 @@ if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
 if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
     msg_resumo = (
         f"📊 <b>PORTFÓLIO DEFI ({get_agora_pt().strftime('%d/%m/%Y %H:%M')} PT)</b>\n\n"
-        f"💰 <b>Investido:</b> ${total_investido:,.2f}\n"
+        f"💰 <b>Investido Total:</b> ${total_investido_global:,.2f} (${total_aportes_extra:,.2f} em aportes)\n"
         f"💵 <b>Atual nas Pools:</b> ${valor_nas_pools:,.2f}\n"
         f"💸 <b>Fees Totais:</b> ${total_fees:,.2f} (${total_fees_sacadas:,.2f} sacadas)\n"
         f"📈 <b>PnL:</b> ${pnl_global:,.2f} ({roi_global:.2f}%)\n"
@@ -542,7 +573,7 @@ if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
 st.title("⚡ Liquidity Hub Pro")
 
 k1, k2, k3 = st.columns(3)
-k1.metric("Investimento Ativo", f"${total_investido:,.2f}")
+k1.metric("Capital Total Investido", f"${total_investido_global:,.2f}", delta=f"+${total_aportes_extra:,.2f} em aportes")
 
 if delta_delta_val is not None:
     k2.metric("Valor em Pools", f"${valor_nas_pools:,.2f}", delta=f"{delta_delta_val:+,.2f} ({pct_dia_anterior:+.2f}%) vs ontem")
@@ -581,7 +612,10 @@ else:
         p_usd = to_float(p.get("preco_atual"))
         r_min = to_float(p.get("range_min"))
         r_max = to_float(p.get("range_max"))
-        v_inv = p["v_inicial_calc"]
+        
+        v_inv_puro = p["v_inicial_puro"]
+        v_aportes = p["v_aportes_calc"]
+        v_inv_total = p["v_inicial_calc"]
         v_at = p["v_atual_calc"]
         v_fees_sacadas = p["fees_sacadas_calc"]
         v_fees_por_recolher = p["fees_por_recolher_calc"]
@@ -596,7 +630,6 @@ else:
         roi_pool = p["roi_pool"]
         
         dias_corridos = p["dias_corridos"]
-        dias_ativos = p["dias_ativos"]
         fees_dia_corrido = p["fees_dia_corrido"]
         apr_corrido = p["apr_corrido"]
         
@@ -622,7 +655,7 @@ else:
             badge_html = f'<span class="badge-inactive">🔴 FORA ({tipo_desvio} | {hrs_inativa:.1f}h)</span>'
             card_class = "pool-card pool-card-inactive"
 
-        dif_valor = v_at - v_inv
+        dif_valor = v_at - v_inv_total
         cor_dif = "#10b981" if dif_valor >= 0 else "#ef4444"
         sinal_dif = "+" if dif_valor > 0 else ""
 
@@ -634,7 +667,8 @@ else:
                     {badge_html}
                 </div>
                 <div style="font-size: 0.9rem; color: #cbd5e1; display: flex; gap: 16px; border-top: 1px solid #2d3748; padding-top: 6px;">
-                    <span>📥 <b>Aporte / Inicial:</b> ${v_inv:,.2f}</span>
+                    <span>📥 <b>Inicial:</b> ${v_inv_puro:,.2f}</span>
+                    <span>➕ <b>Aportes:</b> ${v_aportes:,.2f}</span>
                     <span>💵 <b>Atual:</b> ${v_at:,.2f}</span>
                     <span>📊 <b>Dif:</b> <span style="color: {cor_dif};">{sinal_dif}${dif_valor:,.2f}</span></span>
                 </div>
@@ -668,39 +702,74 @@ else:
                 c_p7.metric("Fees Totais", f"${v_fees_totais:,.2f}")
                 c_p8.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
 
-                with st.expander(f"💸 Registo Rápido de Saque — {par}"):
-                    val_saque_hoje = st.number_input(
-                        "Valor das fees sacadas hoje ($ USD):", 
-                        min_value=0.0, 
-                        step=1.0, 
-                        key=f"input_saque_{pool_id}"
-                    )
-                    data_saque_hoje = st.date_input(
-                        "Data do Saque:", 
-                        value=get_agora_pt().date(), 
-                        key=f"input_data_saque_{pool_id}"
-                    )
-                    
-                    if st.button("⚡ Registar Saque", key=f"btn_saque_{pool_id}", use_container_width=True):
-                        if val_saque_hoje > 0:
-                            novas_fees_sacadas = v_fees_sacadas + val_saque_hoje
-                            patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
-                            res_pool = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
-                            
-                            payload_historico = {
-                                "data": str(data_saque_hoje),
-                                "pool_id": pool_id,
-                                "par": par,
-                                "valor_usd": round(val_saque_hoje, 2)
-                            }
-                            res_hist = requests.post(f"{SUPABASE_URL}/rest/v1/historico_fees", headers=headers, json=payload_historico)
+                col_actions1, col_actions2 = st.columns(2)
+                
+                # Registo Rápido de Saques
+                with col_actions1:
+                    with st.expander(f"💸 Registo Rápido de Saque — {par}"):
+                        val_saque_hoje = st.number_input(
+                            "Valor das fees sacadas hoje ($ USD):", 
+                            min_value=0.0, 
+                            step=1.0, 
+                            key=f"input_saque_{pool_id}"
+                        )
+                        data_saque_hoje = st.date_input(
+                            "Data do Saque:", 
+                            value=get_agora_pt().date(), 
+                            key=f"input_data_saque_{pool_id}"
+                        )
+                        
+                        if st.button("⚡ Registar Saque", key=f"btn_saque_{pool_id}", use_container_width=True):
+                            if val_saque_hoje > 0:
+                                novas_fees_sacadas = v_fees_sacadas + val_saque_hoje
+                                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
+                                res_pool = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
+                                
+                                payload_historico = {
+                                    "data": str(data_saque_hoje),
+                                    "pool_id": pool_id,
+                                    "par": par,
+                                    "valor_usd": round(val_saque_hoje, 2)
+                                }
+                                res_hist = requests.post(f"{SUPABASE_URL}/rest/v1/historico_fees", headers=headers, json=payload_historico)
 
-                            if res_pool.status_code in [200, 204] and res_hist.status_code in [200, 201]:
-                                st.success(f"Registadas +${val_saque_hoje:,.2f} em fees para {par} na data {data_saque_hoje}!")
-                                time.sleep(1)
-                                st.rerun()
-                            else:
-                                st.error("Erro ao atualizar o Supabase.")
+                                if res_pool.status_code in [200, 204] and res_hist.status_code in [200, 201]:
+                                    st.success(f"Registadas +${val_saque_hoje:,.2f} em fees!")
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error("Erro ao atualizar o Supabase.")
+
+                # Registo Rápido de Aportes
+                with col_actions2:
+                    with st.expander(f"➕ Registar Aporte / Reinvestimento — {par}"):
+                        val_aporte_hoje = st.number_input(
+                            "Valor do Aporte ($ USD):", 
+                            min_value=0.0, 
+                            step=5.0, 
+                            key=f"input_aporte_{pool_id}"
+                        )
+                        data_aporte_hoje = st.date_input(
+                            "Data do Aporte:", 
+                            value=get_agora_pt().date(), 
+                            key=f"input_data_aporte_{pool_id}"
+                        )
+                        
+                        if st.button("➕ Registar Aporte", key=f"btn_aporte_{pool_id}", use_container_width=True):
+                            if val_aporte_hoje > 0:
+                                payload_aporte = {
+                                    "pool_id": pool_id,
+                                    "valor": round(val_aporte_hoje, 2),
+                                    "data_aporte": str(data_aporte_hoje)
+                                }
+                                res_ap = requests.post(f"{SUPABASE_URL}/rest/v1/aportes", headers=headers, json=payload_aporte)
+
+                                if res_ap.status_code in [200, 201]:
+                                    st.success(f"Aporte de +${val_aporte_hoje:,.2f} registado com sucesso na tabela 'aportes'!")
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error(f"Erro ao registar aporte: {res_ap.text}")
 
             st.markdown("---")
 
@@ -756,12 +825,13 @@ with col_g2:
 st.markdown("---")
 st.subheader("🛠️ Ferramentas & Gestão")
 
-tab_add, tab_edit, tab_calc, tab_table, tab_fees_hist, tab_llama = st.tabs([
+tab_add, tab_edit, tab_calc, tab_table, tab_fees_hist, tab_aportes_hist, tab_llama = st.tabs([
     "➕ Adicionar Pool", 
     "✏ Editar Posição", 
     "🧮 Calculadora & IL", 
     "📄 Tabela Geral",
     "📜 Histórico de Fees",
+    "➕ Histórico de Aportes",
     "🔥 DefiLlama Yields"
 ])
 
@@ -773,7 +843,7 @@ with tab_add:
         rede_in = c3.text_input("Rede / Plataforma (ex: Raydium - SOLANA)", "Raydium - SOLANA")
 
         c4, c5, c6 = st.columns(3)
-        invest_in = c4.number_input("Aporte / Investimento Inicial ($ USD)", min_value=0.0, step=10.0)
+        invest_in = c4.number_input("Investimento Inicial ($ USD)", min_value=0.0, step=10.0)
         p_nat_inicial_in = c5.number_input("Preço Nativo Inicial", min_value=0.0, format="%.8f")
         v_atual_in = c6.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
 
@@ -834,7 +904,7 @@ with tab_edit:
             e1, e2, e_inv = st.columns(3)
             e_val_atual = e1.number_input("Valor Atual Posição ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
             e_pnat_inicial = e2.number_input("Preço Nativo Inicial", value=to_float(pool_sel.get("preco_inicial")), format="%.8f")
-            e_val_inicial = e_inv.number_input("Investimento Inicial / Aportes ($)", value=to_float(pool_sel.get("valor_inicial")), step=10.0)
+            e_val_inicial = e_inv.number_input("Investimento Inicial Puro ($)", value=to_float(pool_sel.get("valor_inicial")), step=10.0)
 
             e3, e4, e5 = st.columns(3)
             e_fees_sacadas = e3.number_input("Fees Já Sacadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
@@ -925,7 +995,9 @@ with tab_table:
             "par": "Par",
             "rede": "Rede / Plataforma",
             "estado": "Estado",
-            "v_inicial_calc": "Investido ($)",
+            "v_inicial_puro": "Invest. Inicial ($)",
+            "v_aportes_calc": "Aportes ($)",
+            "v_inicial_calc": "Capital Total ($)",
             "v_atual_calc": "Valor Atual ($)",
             "il_pct_calc": "IL (%)",
             "custo_medio_inf_calc": "Custo Médio Real (Queda)",
@@ -940,7 +1012,7 @@ with tab_table:
         existing_cols = [c for c in cols_display.keys() if c in df_table.columns]
         df_display = df_table[existing_cols].rename(columns=cols_display)
         
-        for col in ["Investido ($)", "Valor Atual ($)", "Fees Sacadas ($)", "Fees Por Recolher ($)", "Fees Totais ($)", "Ganhos / Perdas ($ USD)"]:
+        for col in ["Invest. Inicial ($)", "Aportes ($)", "Capital Total ($)", "Valor Atual ($)", "Fees Sacadas ($)", "Fees Por Recolher ($)", "Fees Totais ($)", "Ganhos / Perdas ($ USD)"]:
             if col in df_display.columns:
                 df_display[col] = df_display[col].apply(lambda x: f"${x:,.2f}")
         
@@ -972,6 +1044,25 @@ with tab_fees_hist:
         st.dataframe(df_fees_hist, use_container_width=True, hide_index=True)
     else:
         st.info("Ainda não existem registos de saques de fees guardados.")
+
+with tab_aportes_hist:
+    st.markdown("#### ➕ Registo Histórico de Aportes")
+    if lista_aportes_raw:
+        df_ap = pd.DataFrame(lista_aportes_raw)
+        
+        # Mapear nome da pool se possível
+        mapa_nomes_pools = {p["id"]: p.get("par", f"Pool ID {p['id']}") for p in pools}
+        df_ap["par"] = df_ap["pool_id"].apply(lambda x: mapa_nomes_pools.get(x, f"Pool ID {x}"))
+        
+        df_ap_show = df_ap[["data_aporte", "par", "valor"]].rename(columns={
+            "data_aporte": "Data do Aporte",
+            "par": "Par / Pool",
+            "valor": "Valor do Aporte ($ USD)"
+        })
+        df_ap_show["Valor do Aporte ($ USD)"] = df_ap_show["Valor do Aporte ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        st.dataframe(df_ap_show, use_container_width=True, hide_index=True)
+    else:
+        st.info("Ainda não existem registos de aportes guardados.")
 
 with tab_llama:
     st.markdown("#### 🦙 Maiores Rendimentos DeFi em Tempo Real (DefiLlama)")
@@ -1012,7 +1103,7 @@ with tab_llama:
         }
         
         df_show = df_filtered[list(cols_map.keys())].rename(columns=cols_map)
-        df_show["TVL ($)"] = df_show["TVL ($)"].apply(lambda x: f"${x:,.0f}")
+        df_show["TVL ($)"] = df_show["TVL ($)"] .apply(lambda x: f"${x:,.0f}")
         df_show["APY Total (%)"] = df_show["APY Total (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
 
         st.dataframe(
