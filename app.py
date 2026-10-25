@@ -432,13 +432,14 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO
+# 5. CÁLCULO DE MÉTRICAS COMPLETO (COM VALORIZAÇÃO DINÂMICA DAS FEES)
 # -----------------------------------------------------------------------------
 total_investido_inicial = 0.0
 total_aportes_extra = 0.0
 total_investido_global = 0.0
 total_valor_atual = 0.0
 total_fees_sacadas = 0.0
+total_fees_sacadas_atual = 0.0
 total_fees_por_recolher = 0.0
 total_fees = 0.0
 total_fees_diarias_corridas = 0.0
@@ -467,11 +468,21 @@ for p in pools:
     r_min = to_float(p.get("range_min"))
     r_max = to_float(p.get("range_max"))
 
+    # Cálculo dinâmico do valor atual das fees sacadas na carteira via CLMM
+    wa_fees = calcular_peso_clmm(p_nat_atual, r_min, r_max)
+    wb_fees = 1.0 - wa_fees
+    ratio_preco_fees = (p_nat_atual / p_nat_inicial) if p_nat_inicial > 0 else 1.0
+
+    if v_fees_sacadas > 0 and p_nat_inicial > 0 and p_nat_atual > 0:
+        v_fees_sacadas_atual = v_fees_sacadas * ((wa_fees * ratio_preco_fees) + wb_fees)
+    else:
+        v_fees_sacadas_atual = v_fees_sacadas
+
     il_pct = calcular_il_clmm(p_nat_inicial, p_nat_atual, r_min, r_max)
     il_usd = abs(il_pct / 100.0) * v_inv_total
     custo_medio_inf = calcular_custo_medio_inferior_rigoroso(p_nat_inicial, r_min, r_max)
 
-    v_fees_totais_pool = v_fees_sacadas + v_fees_por_recolher
+    v_fees_totais_pool = v_fees_sacadas_atual + v_fees_por_recolher
     v_atual_final = v_at if v_at > 0 else v_inv_total
 
     pnl_pool = (v_atual_final + v_fees_totais_pool) - v_inv_total
@@ -492,6 +503,7 @@ for p in pools:
     total_investido_global += v_inv_total
     total_valor_atual += v_atual_final
     total_fees_sacadas += v_fees_sacadas
+    total_fees_sacadas_atual += v_fees_sacadas_atual
     total_fees_por_recolher += v_fees_por_recolher
     total_fees += v_fees_totais_pool
     total_fees_diarias_corridas += fees_dia_corrido
@@ -510,6 +522,7 @@ for p in pools:
     p_item["v_inicial_calc"] = v_inv_total
     p_item["v_atual_calc"] = v_atual_final
     p_item["fees_sacadas_calc"] = v_fees_sacadas
+    p_item["fees_sacadas_atual_calc"] = v_fees_sacadas_atual
     p_item["fees_por_recolher_calc"] = v_fees_por_recolher
     p_item["fees_calc"] = v_fees_totais_pool
     p_item["il_pct_calc"] = il_pct
@@ -563,9 +576,9 @@ if st.sidebar.button("📸 Guardar Snapshot Diário", use_container_width=True):
 if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
     msg_resumo = (
         f"📊 <b>PORTFÓLIO DEFI ({get_agora_pt().strftime('%d/%m/%Y %H:%M')} PT)</b>\n\n"
-        f"💰 <b>Investido Total:</b> ${total_investido_global:,.2f} (${total_aportes_extra:,.2f} em aportes)\n"
+        f"💰 <b>Investido Total:</b> ${total_investido_global:,.2f} (${total_aportes_extra:,.2f} aportes)\n"
         f"💵 <b>Atual nas Pools:</b> ${valor_nas_pools:,.2f}\n"
-        f"💸 <b>Fees Totais:</b> ${total_fees:,.2f} (${total_fees_sacadas:,.2f} sacadas)\n"
+        f"💸 <b>Fees Totais:</b> ${total_fees:,.2f} (${total_fees_sacadas_atual:,.2f} val. atual)\n"
         f"📈 <b>PnL:</b> ${pnl_global:,.2f} ({roi_global:.2f}%)\n"
         f"📌 <b>Ativas:</b> 🟢 {total_ativas} | 🔴 {total_inativas}"
     )
@@ -585,7 +598,7 @@ if delta_delta_val is not None:
 else:
     k2.metric("Valor em Pools", f"${valor_nas_pools:,.2f}", delta="Sem histórico anterior")
 
-k3.metric("Fees Totais 💸", f"${total_fees:,.2f}", delta=f"${total_fees_sacadas:,.2f} sacadas")
+k3.metric("Fees Totais 💸", f"${total_fees:,.2f}", delta=f"${total_fees_sacadas_atual:,.2f} val. atual")
 
 k4, k5, k6 = st.columns(3)
 k4.metric("Fees / Dia (Corrido)", f"${total_fees_diarias_corridas:,.2f}/d")
@@ -624,6 +637,7 @@ else:
         v_inv_total = p["v_inicial_calc"]
         v_at = p["v_atual_calc"]
         v_fees_sacadas = p["fees_sacadas_calc"]
+        v_fees_sacadas_atual = p["fees_sacadas_atual_calc"]
         v_fees_por_recolher = p["fees_por_recolher_calc"]
         v_fees_totais = p["fees_calc"]
         
@@ -703,7 +717,7 @@ else:
                 render_sparkline_chart(p_nat, r_min, r_max)
 
                 c_p5, c_p6, c_p7, c_p8 = st.columns(4)
-                c_p5.metric("Fees Sacadas", f"${v_fees_sacadas:,.2f}")
+                c_p5.metric("Fees Sacadas", f"${v_fees_sacadas:,.2f}", delta=f"Atual: ${v_fees_sacadas_atual:,.2f}")
                 c_p6.metric("Fees Por Recolher", f"${v_fees_por_recolher:,.2f}")
                 c_p7.metric("Fees Totais", f"${v_fees_totais:,.2f}")
                 c_p8.metric("PnL Total (+Fees)", f"${pnl_pool:,.2f}", delta=f"{roi_pool:.2f}%")
@@ -1007,6 +1021,7 @@ with tab_table:
             "custo_medio_inf_calc": "Custo Médio Real (Queda)",
             "dias_cobertura_calc": "Dias P/ Anular IL",
             "fees_sacadas_calc": "Fees Sacadas ($)",
+            "fees_sacadas_atual_calc": "Fees Sacadas (Atual $)",
             "fees_por_recolher_calc": "Fees Por Recolher ($)",
             "fees_calc": "Fees Totais ($)",
             "pnl_pool": "Ganhos / Perdas ($ USD)",
@@ -1016,7 +1031,7 @@ with tab_table:
         existing_cols = [c for c in cols_display.keys() if c in df_table.columns]
         df_display = df_table[existing_cols].rename(columns=cols_display)
         
-        for col in ["Invest. Inicial ($)", "Aportes ($)", "Capital Total ($)", "Valor Atual ($)", "Fees Sacadas ($)", "Fees Por Recolher ($)", "Fees Totais ($)", "Ganhos / Perdas ($ USD)"]:
+        for col in ["Invest. Inicial ($)", "Aportes ($)", "Capital Total ($)", "Valor Atual ($)", "Fees Sacadas ($)", "Fees Sacadas (Atual $)", "Fees Por Recolher ($)", "Fees Totais ($)", "Ganhos / Perdas ($ USD)"]:
             if col in df_display.columns:
                 df_display[col] = df_display[col].apply(lambda x: f"${x:,.2f}")
         
