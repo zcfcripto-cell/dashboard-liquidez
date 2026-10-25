@@ -642,6 +642,23 @@ if st.sidebar.button("📲 Resumo no Telegram", use_container_width=True):
     if send_telegram(msg_resumo):
         st.sidebar.success("Enviado!")
 
+if st.sidebar.button("📈 Enviar Relatório Semanal", use_container_width=True):
+    msg_semanal = (
+        f"📋 <b>RELATÓRIO SEMANAL DEFI HUB PRO</b>\n"
+        f"📅 <i>Data: {get_agora_pt().strftime('%d/%m/%Y')}</i>\n\n"
+        f"💰 <b>Capital Investido:</b> ${total_investido_global:,.2f}\n"
+        f"💵 <b>Valor Atual em Pools:</b> ${valor_nas_pools:,.2f}\n"
+        f"💸 <b>Fees Totais Geradas:</b> ${total_fees:,.2f}\n"
+        f"📈 <b>PnL Global:</b> ${pnl_global:,.2f} ({roi_global:.2f}%)\n\n"
+        f"🟢 <b>Pools Ativas:</b> {total_ativas}\n"
+        f"🔴 <b>Pools Fora de Range:</b> {total_inativas}\n"
+        f"🏆 <b>Pools Fechadas:</b> {len(pools_fechadas_processadas)}"
+    )
+    if send_telegram(msg_semanal):
+        st.sidebar.success("Relatório semanal enviado!")
+    else:
+        st.sidebar.error("Erro ao enviar relatório.")
+
 # -----------------------------------------------------------------------------
 # 6. EXIBIÇÃO DE KPIS
 # -----------------------------------------------------------------------------
@@ -920,7 +937,7 @@ if pools_processadas:
     st.plotly_chart(fig_active_perf, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# 9. RAIO-X DETALHADO POR POOL (FEE BREAKDOWN INTERATIVO COM FILTROS E CSV)
+# 9. RAIO-X DETALHADO POR POOL
 # -----------------------------------------------------------------------------
 st.markdown("---")
 st.subheader("🔍 Raio-X Detalhado por Pool (Histórico de Saques de Fees)")
@@ -936,7 +953,6 @@ if todas_pools_combinadas:
     dt_inicio = c_rx2.date_input("Data Inicial:", value=date(2025, 1, 1), key="rx_dt_ini")
     dt_fim = c_rx3.date_input("Data Final:", value=get_agora_pt().date(), key="rx_dt_fim")
     
-    # Filtrar o histórico de fees para esta pool e intervalo de datas
     fees_hist_raw = get_historico_fees()
     fees_pool_filtradas = []
     
@@ -973,7 +989,6 @@ if todas_pools_combinadas:
         )
         st.plotly_chart(fig_raiox, use_container_width=True)
 
-        # Botão para exportação em CSV
         csv_data = df_fees_raiox.to_csv(index=False).encode('utf-8')
         st.download_button(
             label=f"📥 Exportar Saques de {pool_raiox.get('par')} para CSV",
