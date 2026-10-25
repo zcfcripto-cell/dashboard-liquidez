@@ -370,11 +370,13 @@ def sincronizar_pools_silencioso(pools_lista):
             continue
             
         addr = p.get("wallet_address")
+        par_nome = p.get("par", "Par N/A")
         if addr:
             p_usd, p_nat = fetch_dexscreener_data(addr)
             if p_nat is not None:
                 r_min = to_float(p.get("range_min"))
                 r_max = to_float(p.get("range_max"))
+                estado_anterior = normalizar_estado(p.get("estado"))
                 
                 in_range = True
                 if r_max > 0 and p_nat > r_max:
@@ -384,6 +386,36 @@ def sincronizar_pools_silencioso(pools_lista):
                 
                 novo_estado = "Ativa" if in_range else "Inativa"
                 
+                if estado_anterior == "Ativa" and novo_estado == "Inativa":
+                    msg_alerta = (
+                        f"🚨 <b>ALERTA DE SAÍDA DE RANGE!</b> 🚨\n\n"
+                        f"📌 <b>Pool:</b> {par_nome}\n"
+                        f"📉 <b>Preço Atual:</b> {format_crypto_price(p_nat)}\n"
+                        f"🎯 <b>Range Definido:</b> {format_crypto_price(r_min)} - {format_crypto_price(r_max)}\n"
+                        f"⚠️ A posição ficou <b>INATIVA</b>. Avalia se pretendes fazer re-range."
+                    )
+                    send_telegram(msg_alerta)
+                elif novo_estado == "Ativa" and r_min > 0 and r_max > 0:
+                    dist_inf_pct = ((p_nat - r_min) / r_min) * 100
+                    dist_sup_pct = ((r_max - p_nat) / r_max) * 100
+                    
+                    if dist_inf_pct <= 3.0:
+                        msg_prox = (
+                            f"⚠️ <b>ALERTA DE PROXIMIDADE (LIMITE INFERIOR)</b>\n\n"
+                            f"📌 <b>Pool:</b> {par_nome}\n"
+                            f"📉 <b>Preço Atual:</b> {format_crypto_price(p_nat)}\n"
+                            f"🔴 <b>Range Mínimo:</b> {format_crypto_price(r_min)} (A {dist_inf_pct:.2f}% do limite!)"
+                        )
+                        send_telegram(msg_prox)
+                    elif dist_sup_pct <= 3.0:
+                        msg_prox = (
+                            f"⚠️ <b>ALERTA DE PROXIMIDADE (LIMITE SUPERIOR)</b>\n\n"
+                            f"📌 <b>Pool:</b> {par_nome}\n"
+                            f"📈 <b>Preço Atual:</b> {format_crypto_price(p_nat)}\n"
+                            f"🔴 <b>Range Máximo:</b> {format_crypto_price(r_max)} (A {dist_sup_pct:.2f}% do limite!)"
+                        )
+                        send_telegram(msg_prox)
+
                 p_ini = to_float(p.get("preco_inicial"))
                 v_inv = to_float(p.get("valor_inicial"))
                 v_at_db = to_float(p.get("valor_atual"))
@@ -438,8 +470,15 @@ if st.sidebar.button("🔄 Sincronizar Tudo", use_container_width=True):
     st.sidebar.success("Sincronizado!")
     st.rerun()
 
+if st.sidebar.button("🧪 Testar Alerta Telegram", use_container_width=True):
+    test_msg = f"🧪 <b>TESTE DE CONEXÃO DEFI HUB PRO</b>\n\nNotificação enviada às {get_agora_pt().strftime('%H:%M:%S')} PT com sucesso!"
+    if send_telegram(test_msg):
+        st.sidebar.success("Alerta enviado para o Telegram!")
+    else:
+        st.sidebar.error("Erro ao enviar. Verifica o Bot Token e Chat ID.")
+
 # -----------------------------------------------------------------------------
-# 5. CÁLCULO DE MÉTRICAS COMPLETO (Estarão separadas Posições Abertas e Fechadas)
+# 5. CÁLCULO DE MÉTRICAS COMPLETO
 # -----------------------------------------------------------------------------
 total_investido_inicial = 0.0
 total_aportes_extra = 0.0
@@ -493,7 +532,6 @@ for p in pools:
     v_fees_totais_pool = v_fees_sacadas_atual + v_fees_por_recolher
     v_atual_final = v_at if v_at > 0 else v_inv_total
 
-    # Se a pool estiver fechada, usa o valor_fecho guardado
     if estado == "Fechada":
         v_fecho_real = to_float(p.get("valor_fecho"), v_atual_final)
         pnl_pool = (v_fecho_real + v_fees_sacadas) - v_inv_total
@@ -510,7 +548,6 @@ for p in pools:
     fees_dia_ativo = v_fees_totais_pool / dias_ativos
     apr_ativo = ((v_fees_totais_pool / v_inv_total) / dias_ativos * 365 * 100) if v_inv_total > 0 else 0.0
 
-    # Eficiência do Capital: $ de Fees por dia por cada $1,000 investidos
     eficiencia_1k = (fees_dia_corrido / v_inv_total * 1000) if v_inv_total > 0 else 0.0
 
     dias_cobertura = calcular_dias_para_anular_il(il_usd, fees_dia_corrido)
@@ -628,7 +665,7 @@ k6.metric("Estado das Pools", f"🟢 {total_ativas} | 🔴 {total_inativas}")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 7. POSIÇÕES EM MONITORIZAÇÃO (COM EFICIÊNCIA DO CAPITAL)
+# 7. POSIÇÕES EM MONITORIZAÇÃO
 # -----------------------------------------------------------------------------
 st.subheader("📋 Posições em Monitorização")
 
@@ -814,7 +851,7 @@ else:
             st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 8. GRÁFICOS
+# 8. GRÁFICOS DE ANÁLISE DO PORTFÓLIO (ATIVAS)
 # -----------------------------------------------------------------------------
 st.subheader("📊 Análise do Portfólio")
 col_g1, col_g2 = st.columns(2)
@@ -858,6 +895,30 @@ with col_g2:
         st.plotly_chart(fig_hist, use_container_width=True)
     else:
         st.info("A aguardar histórico de PnL...")
+
+# Gráfico de Performance (PnL) Individual por Pool Ativa
+if pools_processadas:
+    df_active_perf = pd.DataFrame(pools_processadas)
+    fig_active_perf = px.bar(
+        df_active_perf,
+        x="par",
+        y="pnl_pool",
+        color="pnl_pool",
+        color_continuous_scale=["#ef4444", "#10b981"],
+        title="Performance Individual (PnL Total + Fees) das Pools Ativas ($ USD)",
+        text=df_active_perf["pnl_pool"].apply(lambda x: f"${x:,.2f}")
+    )
+    fig_active_perf.update_traces(textposition="outside")
+    fig_active_perf.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="white",
+        margin=dict(l=10, r=10, t=40, b=10),
+        xaxis_title="Par / Pool",
+        yaxis_title="PnL ($ USD)",
+        coloraxis_showscale=False
+    )
+    st.plotly_chart(fig_active_perf, use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # 9. FERRAMENTAS & GESTÃO DE POOLS
@@ -981,7 +1042,6 @@ with tab_edit:
 
         st.markdown("---")
         
-        # Secção de Encerramento/Arquivamento de Posição
         st.markdown("#### 🏁 Encerrar / Arquivar Posição")
         with st.form("form_close_pool"):
             val_fecho_input = st.number_input("Valor Total Sacado ao Fechar ($ USD):", min_value=0.0, value=to_float(pool_sel.get("valor_atual")), step=10.0)
@@ -1031,6 +1091,31 @@ with tab_closed:
         mc4.metric("Duração Média", f"{duracao_media:.1f} dias")
 
         st.markdown("<br>", unsafe_allow_html=True)
+
+        # Gráfico Exclusivo de Performance (PnL Realizado) das Pools Fechadas
+        df_closed_perf = pd.DataFrame(pools_fechadas_processadas)
+        fig_closed_perf = px.bar(
+            df_closed_perf,
+            x="par",
+            y="pnl_pool",
+            color="pnl_pool",
+            color_continuous_scale=["#ef4444", "#10b981"],
+            title="Performance Individual (PnL Realizado) das Pools Fechadas ($ USD)",
+            text=df_closed_perf["pnl_pool"].apply(lambda x: f"${x:,.2f}")
+        )
+        fig_closed_perf.update_traces(textposition="outside")
+        fig_closed_perf.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="white",
+            margin=dict(l=10, r=10, t=40, b=10),
+            xaxis_title="Par / Pool",
+            yaxis_title="PnL Realizado ($ USD)",
+            coloraxis_showscale=False
+        )
+        st.plotly_chart(fig_closed_perf, use_container_width=True)
+
+        st.markdown("---")
 
         df_closed = pd.DataFrame(pools_fechadas_processadas)
         cols_closed_display = {
