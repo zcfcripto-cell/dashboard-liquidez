@@ -1079,4 +1079,417 @@ tab_add, tab_edit, tab_closed, tab_calc, tab_table, tab_fees_hist, tab_tokens_su
 with tab_add:
     with st.form("form_add_pool"):
         c1, c2, c3 = st.columns(3)
-        par_in = c1.text_input("Par (
+        par_in = c1.text_input("Par (ex: SOL/USDC)", "")
+        addr_in = c2.text_input("Pair Address (DexScreener)", "")
+        rede_in = c3.text_input("Rede / Plataforma (ex: Raydium - CLMM / Meteora - DLMM)", "Raydium - CLMM")
+
+        c4, c5, c6 = st.columns(3)
+        invest_in = c4.number_input("Investimento Inicial ($ USD)", min_value=0.0, step=10.0)
+        p_nat_inicial_in = c5.number_input("Preço Nativo Inicial (Rácio)", min_value=0.0, format="%.8f")
+        v_atual_in = c6.number_input("Valor Atual Posição ($ USD)", min_value=0.0, step=10.0)
+
+        c7, c8, c9 = st.columns(3)
+        rmin_in = c7.number_input("Range Mínimo", min_value=0.0, format="%.8f")
+        rmax_in = c8.number_input("Range Máximo", min_value=0.0, format="%.8f")
+        data_ent_in = c9.text_input("Data Entrada (YYYY-MM-DD)", value=get_agora_pt().strftime('%Y-%m-%d'))
+        
+        c10, c11 = st.columns(2)
+        fees_sacadas_in = c10.number_input("Fees Já Sacadas ($ USD)", min_value=0.0, step=1.0)
+        fees_por_recolher_in = c11.number_input("Fees Por Recolher ($ USD)", min_value=0.0, step=1.0)
+
+        btn_save = st.form_submit_button("Salvar Nova Pool")
+
+        if btn_save:
+            if not par_in or not addr_in:
+                st.warning("Preencha o nome do par e a morada.")
+            else:
+                p_usd, p_nat = fetch_dexscreener_data(addr_in)
+                payload = {
+                    "par": par_in,
+                    "wallet_address": addr_in,
+                    "rede": rede_in,
+                    "valor_inicial": invest_in,
+                    "valor_atual": v_atual_in if v_atual_in > 0 else invest_in,
+                    "fees": fees_sacadas_in,
+                    "position_pubkey": str(fees_por_recolher_in),
+                    "data_entrada": data_ent_in,
+                    "preco_inicial": p_nat_inicial_in if p_nat_inicial_in > 0 else (p_nat or 0),
+                    "range_min": rmin_in,
+                    "range_max": rmax_in,
+                    "preco_nativo": p_nat or 0,
+                    "preco_atual": p_usd or 0,
+                    "estado": "Ativa",
+                    "horas_inativa": 0.0
+                }
+                res = requests.post(f"{SUPABASE_URL}/rest/v1/pools", headers=headers, json=payload)
+                if res.status_code in [200, 201]:
+                    st.success("Pool adicionada com sucesso!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao salvar: {res.text}")
+
+with tab_edit:
+    if not pools:
+        st.info("Não existem pools para editar.")
+    else:
+        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')} ({p.get('rede', '')})": p for p in pools}
+        escolha = st.selectbox("Selecione a Pool a Editar:", list(lista_opcoes.keys()))
+        pool_sel = lista_opcoes[escolha]
+        
+        with st.form("form_edit_pool"):
+            st.markdown(f"**Editar Posição ID {pool_sel['id']} ({pool_sel.get('par')})**")
+
+            e_rede = st.text_input("Rede / Plataforma", value=str(pool_sel.get("rede", "")))
+
+            e1, e2, e_inv = st.columns(3)
+            e_val_atual = e1.number_input("Valor Atual Posição ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
+            e_pnat_inicial = e2.number_input("Preço Nativo Inicial", value=to_float(pool_sel.get("preco_inicial")), format="%.8f")
+            e_val_inicial = e_inv.number_input("Investimento Inicial Puro ($)", value=to_float(pool_sel.get("valor_inicial")), step=10.0)
+
+            e3, e4, e5 = st.columns(3)
+            e_fees_sacadas = e3.number_input("Fees Já Sacadas ($)", value=to_float(pool_sel.get("fees")), step=1.0)
+            e_fees_por_recolher = e4.number_input("Fees Por Recolher ($)", value=to_float(pool_sel.get("position_pubkey")), step=1.0)
+            e_data_ent = e5.text_input("Data Entrada", value=str(pool_sel.get("data_entrada", "")))
+
+            e6, e7 = st.columns(2)
+            e_rmin = e6.number_input("Range Mínimo", value=to_float(pool_sel.get("range_min")), format="%.8f")
+            e_rmax = e7.number_input("Range Máximo", value=to_float(pool_sel.get("range_max")), format="%.8f")
+
+            btn_update = st.form_submit_button("💾 Guardar Alterações")
+
+            if btn_update:
+                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+                update_payload = {
+                    "rede": e_rede,
+                    "valor_atual": e_val_atual,
+                    "preco_inicial": e_pnat_inicial,
+                    "valor_inicial": e_val_inicial,
+                    "fees": e_fees_sacadas,
+                    "position_pubkey": str(e_fees_por_recolher),
+                    "data_entrada": e_data_ent,
+                    "range_min": e_rmin,
+                    "range_max": e_rmax
+                }
+                res = requests.patch(patch_url, headers=headers, json=update_payload)
+                if res.status_code in [200, 204]:
+                    st.success("Alterações guardadas!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao guardar: {res.text}")
+
+        st.markdown("---")
+        
+        st.markdown("#### 🏁 Encerrar / Arquivar Posição")
+        with st.form("form_close_pool"):
+            val_fecho_input = st.number_input("Valor Total Sacado ao Fechar ($ USD):", min_value=0.0, value=to_float(pool_sel.get("valor_atual")), step=10.0)
+            data_fecho_input = st.date_input("Data de Fecho:", value=get_agora_pt().date())
+            btn_close_action = st.form_submit_button("🔒 Confirmar e Arquivar Posição")
+
+            if btn_close_action:
+                patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+                close_payload = {
+                    "estado": "Fechada",
+                    "valor_fecho": val_fecho_input,
+                    "data_fecho": str(data_fecho_input)
+                }
+                res_c = requests.patch(patch_url, headers=headers, json=close_payload)
+                if res_c.status_code in [200, 204]:
+                    st.success(f"Posição ID {pool_sel['id']} encerrada e movida para o histórico!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Erro ao fechar posição: {res_c.text}")
+
+        st.markdown("---")
+        st.markdown("#### 🚨 Eliminar Posição")
+        if st.button(f"🗑️ Eliminar Permanente ID {pool_sel['id']}", type="primary", use_container_width=True):
+            del_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_sel['id']}"
+            del_res = requests.delete(del_url, headers=headers)
+            if del_res.status_code in [200, 204]:
+                st.success("Pool eliminada!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("Erro ao eliminar a pool.")
+
+with tab_closed:
+    st.markdown("#### 🏆 Histórico de Posições Fechadas (PnL Realizado)")
+    if pools_fechadas_processadas:
+        total_pnl_fechado = sum(p["pnl_pool"] for p in pools_fechadas_processadas)
+        total_pools_fechadas = len(pools_fechadas_processadas)
+        winning_pools = sum(1 for p in pools_fechadas_processadas if p["pnl_pool"] > 0)
+        win_rate = (winning_pools / total_pools_fechadas * 100) if total_pools_fechadas > 0 else 0.0
+        duracao_media = sum(p["dias_corridos"] for p in pools_fechadas_processadas) / total_pools_fechadas
+
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc1.metric("PnL Realizado Total", f"${total_pnl_fechado:,.2f}")
+        mc2.metric("Win Rate", f"{win_rate:.1f}%", delta=f"{winning_pools}/{total_pools_fechadas} Lucrativas")
+        mc3.metric("Total Pools Fechadas", f"{total_pools_fechadas}")
+        mc4.metric("Duração Média", f"{duracao_media:.1f} dias")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        df_closed_perf = pd.DataFrame(pools_fechadas_processadas)
+        fig_closed_perf = px.bar(
+            df_closed_perf,
+            x="par",
+            y="pnl_pool",
+            color="pnl_pool",
+            color_continuous_scale=["#ef4444", "#10b981"],
+            title="Performance Individual (PnL Realizado) das Pools Fechadas ($ USD)",
+            text=df_closed_perf["pnl_pool"].apply(lambda x: f"${x:,.2f}")
+        )
+        fig_closed_perf.update_traces(textposition="outside")
+        fig_closed_perf.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font_color="white",
+            margin=dict(l=10, r=10, t=40, b=10),
+            xaxis_title="Par / Pool",
+            yaxis_title="PnL Realizado ($ USD)",
+            coloraxis_showscale=False
+        )
+        st.plotly_chart(fig_closed_perf, use_container_width=True)
+
+        st.markdown("---")
+
+        df_closed = pd.DataFrame(pools_fechadas_processadas)
+        cols_closed_display = {
+            "id": "ID",
+            "par": "Par",
+            "rede": "Rede / Plataforma",
+            "v_inicial_calc": "Capital Investido ($)",
+            "fees_sacadas_calc": "Fees Sacadas ($)",
+            "pnl_pool": "PnL Realizado ($)",
+            "roi_pool": "ROI Realizado (%)",
+            "dias_corridos": "Duração (Dias)"
+        }
+        
+        existing_cols = [c for c in cols_closed_display.keys() if c in df_closed.columns]
+        df_closed_show = df_closed[existing_cols].rename(columns=cols_closed_display)
+        
+        for col in ["Capital Investido ($)", "Fees Sacadas ($)", "PnL Realizado ($)"]:
+            if col in df_closed_show.columns:
+                df_closed_show[col] = df_closed_show[col].apply(lambda x: f"${x:,.2f}")
+        
+        if "ROI Realizado (%)" in df_closed_show.columns:
+            df_closed_show["ROI Realizado (%)"] = df_closed_show["ROI Realizado (%)"].apply(lambda x: f"{x:.2f}%")
+            
+        st.dataframe(df_closed_show, use_container_width=True, hide_index=True)
+    else:
+        st.info("Ainda não existem posições arquivadas como 'Fechadas'.")
+
+with tab_calc:
+    col_c1, col_c2 = st.columns(2)
+
+    with col_c1:
+        st.markdown("#### 🎯 Calculadora de Novos Ranges")
+        p_ref = st.number_input("Preço Nativo Atual", min_value=0.0, value=0.000049, format="%.8f", key="calc_p_ref")
+        var_pct = st.slider("Amplitude (± %)", min_value=1.0, max_value=50.0, value=15.0, step=0.5, key="calc_var_pct")
+
+        if p_ref > 0:
+            novo_min = p_ref * (1 - (var_pct / 100))
+            novo_max = p_ref * (1 + (var_pct / 100))
+            st.write(f"**Novo Range Mínimo (-{var_pct}%):** `{format_crypto_price(novo_min)}`")
+            st.write(f"**Novo Range Máximo (+{var_pct}%):** `{format_crypto_price(novo_max)}`")
+
+    with col_c2:
+        st.markdown("#### 📉 Simulador de IL CLMM / DLMM")
+        var_preco_simulada = st.slider("Variação de Preço (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0, key="calc_il_slider")
+        rmin_sim = st.number_input("Range Mínimo (Simulação)", value=0.000030, format="%.8f")
+        rmax_sim = st.number_input("Range Máximo (Simulação)", value=0.000080, format="%.8f")
+        p_atual_sim = 0.000050 * (1.0 + var_preco_simulada / 100.0)
+
+        wa_sim = calcular_peso_clmm(p_atual_sim, rmin_sim, rmax_sim)
+        wb_sim = 1.0 - wa_sim
+        razao_sim = 1.0 + (var_preco_simulada / 100.0)
+        
+        if wa_sim == 1.0:
+            il_res = (razao_sim - 1) * 100
+        elif wa_sim == 0.0:
+            il_res = 0.0
+        else:
+            v_h = (wa_sim * razao_sim) + wb_sim
+            v_l = razao_sim ** wa_sim
+            il_res = ((v_l / v_h) - 1) * 100 if v_h > 0 else 0.0
+
+        st.metric("IL Estimada", f"{il_res:.2f}%", delta=f"Peso Token A: {wa_sim*100:.1f}%", delta_color="inverse")
+
+with tab_table:
+    if pools_processadas:
+        df_table = pd.DataFrame(pools_processadas)
+        
+        cols_display = {
+            "id": "ID",
+            "par": "Par",
+            "rede": "Rede / Plataforma",
+            "estado": "Estado",
+            "v_inicial_puro": "Invest. Inicial ($)",
+            "v_aportes_calc": "Aportes ($)",
+            "v_inicial_calc": "Capital Total ($)",
+            "v_atual_calc": "Valor Atual ($)",
+            "eficiencia_1k": "Eficiência ($/dia por $1k)",
+            "il_pct_calc": "IL (%)",
+            "custo_medio_inf_calc": "Custo Médio Real (Queda)",
+            "fees_sacadas_calc": "Fees Sacadas ($)",
+            "fees_sacadas_atual_calc": "Fees Sacadas (Atual $)",
+            "fees_por_recolher_calc": "Fees Por Recolher ($)",
+            "fees_calc": "Fees Totais ($)",
+            "pnl_pool": "Ganhos / Perdas ($ USD)",
+            "roi_pool": "ROI (%)"
+        }
+        
+        existing_cols = [c for c in cols_display.keys() if c in df_table.columns]
+        df_display = df_table[existing_cols].rename(columns=cols_display)
+        
+        for col in ["Invest. Inicial ($)", "Aportes ($)", "Capital Total ($)", "Valor Atual ($)", "Fees Sacadas ($)", "Fees Sacadas (Atual $)", "Fees Por Recolher ($)", "Fees Totais ($)", "Ganhos / Perdas ($ USD)"]:
+            if col in df_display.columns:
+                df_display[col] = df_display[col].apply(lambda x: f"${x:,.2f}")
+        
+        if "Eficiência ($/dia por $1k)" in df_display.columns:
+            df_display["Eficiência ($/dia por $1k)"] = df_display["Eficiência ($/dia por $1k)"].apply(lambda x: f"${x:,.2f}")
+        if "IL (%)" in df_display.columns:
+            df_display["IL (%)"] = df_display["IL (%)"].apply(lambda x: f"{x:.2f}%")
+        if "Custo Médio Real (Queda)" in df_display.columns:
+            df_display["Custo Médio Real (Queda)"] = df_display["Custo Médio Real (Queda)"].apply(lambda x: format_crypto_price(x))
+        if "ROI (%)" in df_display.columns:
+            df_display["ROI (%)"] = df_display["ROI (%)"].apply(lambda x: f"{x:.2f}%")
+
+        df_display = df_display.fillna("")
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhuma posição ativa registada na base de dados.")
+
+with tab_fees_hist:
+    st.markdown("#### 📜 Registo Histórico de Saques de Fees")
+    fees_hist_data = get_historico_fees()
+    if fees_hist_data:
+        df_fees_hist = pd.DataFrame(fees_hist_data)
+        cols_hist = ["data", "par", "valor_usd"]
+        if "qtd_token_a" in df_fees_hist.columns:
+            cols_hist.append("qtd_token_a")
+        if "qtd_token_b" in df_fees_hist.columns:
+            cols_hist.append("qtd_token_b")
+            
+        df_fees_hist = df_fees_hist[cols_hist].rename(columns={
+            "data": "Data do Saque",
+            "par": "Par / Pool",
+            "valor_usd": "Valor Sacado ($ USD)",
+            "qtd_token_a": "Qtd Token Volátil",
+            "qtd_token_b": "Qtd Token Base"
+        })
+        df_fees_hist["Valor Sacado ($ USD)"] = df_fees_hist["Valor Sacado ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        st.dataframe(df_fees_hist, use_container_width=True, hide_index=True)
+    else:
+        st.info("Ainda não existem registos de saques de fees guardados.")
+
+with tab_tokens_summary:
+    st.markdown("#### 📊 Resumo de Tokens Sacados por Pool (Acumulado)")
+    fees_hist_data = get_historico_fees()
+    if fees_hist_data:
+        df_summary = pd.DataFrame(fees_hist_data)
+        
+        df_summary["valor_usd"] = df_summary["valor_usd"].apply(to_float)
+        df_summary["qtd_token_a"] = df_summary.get("qtd_token_a", 0).apply(to_float)
+        df_summary["qtd_token_b"] = df_summary.get("qtd_token_b", 0).apply(to_float)
+        
+        grouped = df_summary.groupby("par").agg(
+            total_saques=("id", "count"),
+            total_usd=("valor_usd", "sum"),
+            total_token_a=("qtd_token_a", "sum"),
+            total_token_b=("qtd_token_b", "sum")
+        ).reset_index()
+
+        grouped_show = grouped.rename(columns={
+            "par": "Par / Pool",
+            "total_saques": "Nº de Saques",
+            "total_token_a": "Total Token Volátil (A)",
+            "total_token_b": "Total Token Base (B)",
+            "total_usd": "Total Valor ($ USD)"
+        })
+
+        grouped_show["Total Valor ($ USD)"] = grouped_show["Total Valor ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        grouped_show["Total Token Volátil (A)"] = grouped_show["Total Token Volátil (A)"].apply(lambda x: f"{x:,.6f}")
+        grouped_show["Total Token Base (B)"] = grouped_show["Total Token Base (B)"].apply(lambda x: f"{x:,.4f}")
+
+        st.dataframe(grouped_show, use_container_width=True, hide_index=True)
+
+        csv_summary = grouped.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Exportar Resumo de Tokens em CSV",
+            data=csv_summary,
+            file_name=f"resumo_tokens_sacados_{get_agora_pt().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("Nenhum histórico de fees disponível para gerar o resumo por token.")
+
+with tab_aportes_hist:
+    st.markdown("#### ➕ Registo Histórico de Aportes")
+    if lista_aportes_raw:
+        df_ap = pd.DataFrame(lista_aportes_raw)
+        mapa_nomes_pools = {p["id"]: p.get("par", f"Pool ID {p['id']}") for p in pools}
+        df_ap["par"] = df_ap["pool_id"].apply(lambda x: mapa_nomes_pools.get(x, f"Pool ID {x}"))
+        
+        df_ap_show = df_ap[["data_aporte", "par", "valor"]].rename(columns={
+            "data_aporte": "Data do Aporte",
+            "par": "Par / Pool",
+            "valor": "Valor do Aporte ($ USD)"
+        })
+        df_ap_show["Valor do Aporte ($ USD)"] = df_ap_show["Valor do Aporte ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        st.dataframe(df_ap_show, use_container_width=True, hide_index=True)
+    else:
+        st.info("Ainda não existem registos de aportes guardados.")
+
+with tab_llama:
+    st.markdown("#### 🦙 Maiores Rendimentos DeFi em Tempo Real (DefiLlama)")
+    data_llama = fetch_defillama_yields()
+    
+    if not data_llama:
+        st.warning("Não foi possível carregar os dados do DefiLlama de momento.")
+    else:
+        df_llama = pd.DataFrame(data_llama)
+        col_f1, col_f2, col_f3 = st.columns(3)
+        
+        chains_disponiveis = sorted(df_llama["chain"].dropna().unique().tolist())
+        default_chains = [c for c in ["Solana", "Ethereum", "Arbitrum"] if c in chains_disponiveis]
+        chain_sel = col_f1.multiselect("Filtrar por Rede (Chain):", chains_disponiveis, default=default_chains)
+        tvl_min = col_f2.number_input("TVL Mínimo ($ USD):", min_value=10000, value=100000, step=50000)
+        ordem_sel = col_f3.selectbox("Ordenar por:", ["APY Total (apy)", "APY Base / Fees (apyBase)", "TVL ($)"])
+
+        df_filtered = df_llama[df_llama["chain"].isin(chain_sel)] if chain_sel else df_llama
+        df_filtered = df_filtered[df_filtered["tvlUsd"] >= tvl_min]
+
+        sort_col = "apy"
+        if ordem_sel == "APY Base / Fees (apyBase)":
+            sort_col = "apyBase"
+        elif ordem_sel == "TVL ($)":
+            sort_col = "tvlUsd"
+
+        df_filtered = df_filtered.sort_values(by=sort_col, ascending=False).head(50)
+        
+        df_filtered["link_llama"] = df_filtered.apply(lambda r: f"https://defillama.com/yields/pool/{r['pool']}", axis=1)
+        
+        cols_map = {
+            "symbol": "Par / Símbolo",
+            "project": "Protocolo",
+            "chain": "Rede",
+            "tvlUsd": "TVL ($)",
+            "apy": "APY Total (%)",
+            "link_llama": "DefiLlama"
+        }
+        
+        df_show = df_filtered[list(cols_map.keys())].rename(columns=cols_map)
+        df_show["TVL ($)"] = df_show["TVL ($)"].apply(lambda x: f"${x:,.0f}")
+        df_show["APY Total (%)"] = df_show["APY Total (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
+
+        st.dataframe(
+            df_show, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "DefiLlama": st.column_config.LinkColumn("DefiLlama", display_text="🦙 Ver Pool")
+            }
+        )
