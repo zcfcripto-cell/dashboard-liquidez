@@ -93,8 +93,8 @@ st.markdown("""
 </style>
 
 <div class="scroll-btn-container">
-    <a href="javascript:window.scrollTo({top: 0, behavior: 'smooth'});" class="scroll-btn" title="Ir para o Topo">⬆️</a>
-    <a href="#ferramentas-gestao" class="scroll-btn" title="Ir para o Fundo">⬇️</a>
+    <a href="javascript:void(0);" onclick="window.parent.scrollTo({top: 0, behavior: 'smooth'});" class="scroll-btn" title="Ir para o Topo">⬆️</a>
+    <a href="javascript:void(0);" onclick="const el = window.parent.document.getElementById('ferramentas-gestao'); if(el){ el.scrollIntoView({behavior: 'smooth'}); }" class="scroll-btn" title="Ir para o Fundo">⬇️</a>
 </div>
 """, unsafe_allow_html=True)
 
