@@ -1457,3 +1457,46 @@ with tab_llama:
                 "DefiLlama": st.column_config.LinkColumn("DefiLlama", display_text="🦙 Ver Pool")
             }
         )
+# -----------------------------------------------------------------------------
+# BOTÕES FLUTUANTES (TOPO E FUNDO)
+# -----------------------------------------------------------------------------
+st.markdown("""
+<style>
+    .scroll-btn-container {
+        position: fixed;
+        bottom: 25px;
+        right: 25px;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .scroll-btn {
+        background-color: #1a1f2c;
+        color: #38bdf8;
+        border: 1px solid #2d3748;
+        border-radius: 50%;
+        width: 45px;
+        height: 45px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        transition: all 0.2s ease-in-out;
+        text-decoration: none;
+    }
+    .scroll-btn:hover {
+        background-color: #38bdf8;
+        color: #0e1117;
+        transform: scale(1.08);
+        border-color: #38bdf8;
+    }
+</style>
+
+<div class="scroll-btn-container">
+    <a href="#" class="scroll-btn" title="Ir para o Topo">⬆️</a>
+    <a href="#ferramentas-gestao" class="scroll-btn" title="Ir para o Fundo">⬇️</a>
+</div>
+""", unsafe_allow_html=True)
