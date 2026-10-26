@@ -791,11 +791,26 @@ else:
                 with col_actions1:
                     with st.expander(f"💸 Registo Rápido de Saque — {par}"):
                         val_saque_hoje = st.number_input(
-                            "Valor das fees sacadas hoje ($ USD):", 
+                            "Valor Total das Fees Sacadas ($ USD):", 
                             min_value=0.0, 
                             step=1.0, 
                             key=f"input_saque_{pool_id}"
                         )
+                        
+                        c_tok_a, c_tok_b = st.columns(2)
+                        qtd_tok_a_input = c_tok_a.number_input(
+                            "Qtd Token A (Volátil):", 
+                            min_value=0.0, 
+                            format="%.6f", 
+                            key=f"input_qtd_a_{pool_id}"
+                        )
+                        qtd_tok_b_input = c_tok_b.number_input(
+                            "Qtd Token B (Base/USDC):", 
+                            min_value=0.0, 
+                            format="%.4f", 
+                            key=f"input_qtd_b_{pool_id}"
+                        )
+                        
                         data_saque_hoje = st.date_input(
                             "Data do Saque:", 
                             value=get_agora_pt().date(), 
@@ -808,23 +823,25 @@ else:
                                 patch_url = f"{SUPABASE_URL}/rest/v1/pools?id=eq.{pool_id}"
                                 res_pool = requests.patch(patch_url, headers=headers, json={"fees": novas_fees_sacadas})
                                 
-                                wa_saque = calcular_peso_clmm(p_nat, r_min, r_max)
-                                wb_saque = 1.0 - wa_saque
-                                
-                                val_usd_token_a = val_saque_hoje * wa_saque
-                                val_usd_token_b = val_saque_hoje * wb_saque
-                                
-                                p_usd_a = p_usd if p_usd > 0 else 1.0
-                                qtd_a = val_usd_token_a / p_usd_a if p_usd_a > 0 else 0.0
-                                qtd_b = val_usd_token_b
+                                if qtd_tok_a_input == 0 and qtd_tok_b_input == 0:
+                                    wa_saque = calcular_peso_clmm(p_nat, r_min, r_max)
+                                    wb_saque = 1.0 - wa_saque
+                                    val_usd_token_a = val_saque_hoje * wa_saque
+                                    val_usd_token_b = val_saque_hoje * wb_saque
+                                    p_usd_a = p_usd if p_usd > 0 else (p_nat if p_nat > 0 else 1.0)
+                                    final_qtd_a = val_usd_token_a / p_usd_a if p_usd_a > 0 else 0.0
+                                    final_qtd_b = val_usd_token_b
+                                else:
+                                    final_qtd_a = qtd_tok_a_input
+                                    final_qtd_b = qtd_tok_b_input
                                 
                                 payload_historico = {
                                     "data": str(data_saque_hoje),
                                     "pool_id": pool_id,
                                     "par": par,
                                     "valor_usd": round(val_saque_hoje, 2),
-                                    "qtd_token_a": round(qtd_a, 6),
-                                    "qtd_token_b": round(qtd_b, 4)
+                                    "qtd_token_a": round(final_qtd_a, 6),
+                                    "qtd_token_b": round(final_qtd_b, 4)
                                 }
                                 res_hist = requests.post(f"{SUPABASE_URL}/rest/v1/historico_fees", headers=headers, json=payload_historico)
 
@@ -1008,13 +1025,14 @@ else:
 st.markdown("---")
 st.subheader("🛠️ Ferramentas & Gestão")
 
-tab_add, tab_edit, tab_closed, tab_calc, tab_table, tab_fees_hist, tab_aportes_hist, tab_llama = st.tabs([
+tab_add, tab_edit, tab_closed, tab_calc, tab_table, tab_fees_hist, tab_tokens_summary, tab_aportes_hist, tab_llama = st.tabs([
     "➕ Adicionar Pool", 
     "✏ Editar / Fechar Posição", 
     "🏆 Posições Fechadas",
     "🧮 Calculadora & IL", 
     "📄 Tabela Geral",
     "📜 Histórico de Fees",
+    "📊 Resumo por Token",
     "➕ Histórico de Aportes",
     "🔥 DefiLlama Yields"
 ])
@@ -1327,6 +1345,50 @@ with tab_fees_hist:
         st.dataframe(df_fees_hist, use_container_width=True, hide_index=True)
     else:
         st.info("Ainda não existem registos de saques de fees guardados.")
+
+with tab_tokens_summary:
+    st.markdown("#### 📊 Resumo de Tokens Sacados por Pool (Acumulado)")
+    fees_hist_data = get_historico_fees()
+    if fees_hist_data:
+        df_summary = pd.DataFrame(fees_hist_data)
+        
+        # Garantir colunas numéricas
+        df_summary["valor_usd"] = df_summary["valor_usd"].apply(to_float)
+        df_summary["qtd_token_a"] = df_summary.get("qtd_token_a", 0).apply(to_float)
+        df_summary["qtd_token_b"] = df_summary.get("qtd_token_b", 0).apply(to_float)
+        
+        # Agrupar por Par/Pool
+        grouped = df_summary.groupby("par").agg(
+            total_saques=("id", "count"),
+            total_usd=("valor_usd", "sum"),
+            total_token_a=("qtd_token_a", "sum"),
+            total_token_b=("qtd_token_b", "sum")
+        ).reset_index()
+
+        grouped_show = grouped.rename(columns={
+            "par": "Par / Pool",
+            "total_saques": "Nº de Saques",
+            "total_token_a": "Total Token Volátil (A)",
+            "total_token_b": "Total Token Base (B)",
+            "total_usd": "Total Valor ($ USD)"
+        })
+
+        # Formatação
+        grouped_show["Total Valor ($ USD)"] = grouped_show["Total Valor ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        grouped_show["Total Token Volátil (A)"] = grouped_show["Total Token Volátil (A)"].apply(lambda x: f"{x:,.6f}")
+        grouped_show["Total Token Base (B)"] = grouped_show["Total Token Base (B)"].apply(lambda x: f"{x:,.4f}")
+
+        st.dataframe(grouped_show, use_container_width=True, hide_index=True)
+
+        csv_summary = grouped.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Exportar Resumo de Tokens em CSV",
+            data=csv_summary,
+            file_name=f"resumo_tokens_sacados_{get_agora_pt().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("Nenhum histórico de fees disponível para gerar o resumo por token.")
 
 with tab_aportes_hist:
     st.markdown("#### ➕ Registo Histórico de Aportes")
