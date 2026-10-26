@@ -9,7 +9,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 
 # -----------------------------------------------------------------------------
 # 1. CONFIGURAÇÃO DA PÁGINA & CSS RESPONSIVO
@@ -55,7 +54,7 @@ st.markdown("""
         font-size: 0.8rem;
     }
 
-    /* Estilos dos Botões Flutuantes */
+    /* Botões Flutuantes (Topo e Fundo) */
     .scroll-btn-container {
         position: fixed;
         bottom: 25px;
@@ -79,7 +78,7 @@ st.markdown("""
         cursor: pointer;
         box-shadow: 0 4px 12px rgba(0,0,0,0.4);
         transition: all 0.2s ease-in-out;
-        outline: none;
+        text-decoration: none;
     }
     .scroll-btn:hover {
         background-color: #38bdf8;
@@ -95,69 +94,12 @@ st.markdown("""
         h3 { font-size: 1.1rem !important; }
     }
 </style>
-""", unsafe_allow_html=True)
 
-# Injeção direta de componentes HTML/JS para contornar o iframe do Streamlit
-components.html("""
 <div class="scroll-btn-container">
-    <button onclick="irParaTopo()" class="scroll-btn" title="Ir para o Topo">⬆️</button>
-    <button onclick="irParaFundo()" class="scroll-btn" title="Ir para o Fundo">⬇️</button>
+    <a href="#topo-pagina" class="scroll-btn" title="Ir para o Topo">⬆️</a>
+    <a href="#ferramentas-gestao" class="scroll-btn" title="Ir para o Fundo">⬇️</a>
 </div>
-
-<script>
-function irParaTopo() {
-    var mainWin = window.parent || window;
-    var el = mainWin.document.getElementById('topo-pagina') || mainWin.document.querySelector('section.main');
-    if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } else {
-        mainWin.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-}
-
-function irParaFundo() {
-    var mainWin = window.parent || window;
-    var el = mainWin.document.getElementById('ferramentas-gestao');
-    if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } else {
-        mainWin.scrollTo({ top: mainWin.document.body.scrollHeight, behavior: 'smooth' });
-    }
-}
-</script>
-<style>
-    .scroll-btn-container {
-        position: fixed;
-        bottom: 25px;
-        right: 25px;
-        z-index: 999999;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
-    .scroll-btn {
-        background-color: #1a1f2c;
-        color: #38bdf8;
-        border: 1px solid #2d3748;
-        border-radius: 50%;
-        width: 45px;
-        height: 45px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.2rem;
-        cursor: pointer;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-        transition: all 0.2s ease-in-out;
-    }
-    .scroll-btn:hover {
-        background-color: #38bdf8;
-        color: #0e1117;
-        transform: scale(1.08);
-        border-color: #38bdf8;
-    }
-</style>
-""", height=0)
+""", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # 2. CREDENCIAIS & SECRETS
