@@ -36,7 +36,6 @@ st.markdown("""
     }
     .pool-card-active { border-left: 5px solid #10b981; }
     .pool-card-inactive { border-left: 5px solid #ef4444; }
-    .pool-card-closed { border-left: 5px solid #64748b; opacity: 0.8; }
     
     .badge-active {
         background-color: rgba(16, 185, 129, 0.2);
@@ -49,14 +48,6 @@ st.markdown("""
     .badge-inactive {
         background-color: rgba(239, 68, 68, 0.2);
         color: #ef4444;
-        padding: 4px 10px;
-        border-radius: 12px;
-        font-weight: 600;
-        font-size: 0.8rem;
-    }
-    .badge-closed {
-        background-color: rgba(100, 116, 139, 0.2);
-        color: #94a3b8;
         padding: 4px 10px;
         border-radius: 12px;
         font-weight: 600;
@@ -416,9 +407,7 @@ def calcular_dias_para_anular_il(il_usd, fees_dia_media):
 def sincronizar_pools_silencioso(pools_lista):
     agora = time.time()
     for p in pools_lista:
-        # Verificação estricta e segura para ignorar pools fechadas
-        estado_atual_db = normalizar_estado(p.get("estado"))
-        if estado_atual_db == "Fechada":
+        if normalizar_estado(p.get("estado")) == "Fechada":
             continue
             
         addr = p.get("wallet_address")
@@ -428,6 +417,7 @@ def sincronizar_pools_silencioso(pools_lista):
             if p_nat is not None:
                 r_min = to_float(p.get("range_min"))
                 r_max = to_float(p.get("range_max"))
+                estado_anterior = normalizar_estado(p.get("estado"))
                 
                 in_range = True
                 if r_max > 0 and p_nat > r_max:
@@ -437,7 +427,7 @@ def sincronizar_pools_silencioso(pools_lista):
                 
                 novo_estado = "Ativa" if in_range else "Inativa"
                 
-                if estado_atual_db == "Ativa" and novo_estado == "Inativa":
+                if estado_anterior == "Ativa" and novo_estado == "Inativa":
                     msg_alerta = (
                         f"🚨 <b>ALERTA DE SAÍDA DE RANGE!</b> 🚨\n\n"
                         f"📌 <b>Pool:</b> {par_nome}\n"
@@ -471,8 +461,6 @@ def sincronizar_pools_silencioso(pools_lista):
                 v_inv = to_float(p.get("valor_inicial"))
                 v_at_db = to_float(p.get("valor_atual"))
                 
-                # Se o valor atual foi forçado manualmente e difere muito, podemos respeitar ou recalcular
-                # Mantemos o cálculo automático de CLMM se aplicável
                 if p_ini > 0 and p_nat > 0 and v_inv > 0:
                     wa = calcular_peso_clmm(p_nat, r_min, r_max)
                     wb = 1.0 - wa
@@ -1145,13 +1133,11 @@ with tab_add:
                     st.error(f"Erro ao salvar: {res.text}")
 
 with tab_edit:
-    # Combinamos pools ativas e fechadas para poderes editar qualquer uma delas (caso queira reativar ou corrigir valores)
-    todas_para_editar = pools + pools_fechadas_processadas
-    if not todas_para_editar:
+    if not pools:
         st.info("Não existem pools para editar.")
     else:
-        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')} ({p.get('estado', '')})": p for p in todas_para_editar}
-        escolha = st.selectbox("Selecione a Pool a Editar (Ativa ou Fechada):", list(lista_opcoes.keys()), key="select_edit_pool_geral")
+        lista_opcoes = {f"ID {p['id']} - {p.get('par', 'N/A')} ({p.get('rede', '')})": p for p in pools}
+        escolha = st.selectbox("Selecione a Pool a Editar:", list(lista_opcoes.keys()))
         pool_sel = lista_opcoes[escolha]
         
         with st.form("form_edit_pool"):
@@ -1160,8 +1146,7 @@ with tab_edit:
             e_rede = st.text_input("Rede / Plataforma", value=str(pool_sel.get("rede", "")))
 
             e1, e2, e_inv = st.columns(3)
-            # Campo direto para corrigir o valor atual da pool (útil para SOL/PUMP)
-            e_val_atual = e1.number_input("Valor Atual Posição ($ USD) [Correção SOL/PUMP]", value=to_float(pool_sel.get("valor_atual")), step=10.0)
+            e_val_atual = e1.number_input("Valor Atual Posição ($)", value=to_float(pool_sel.get("valor_atual")), step=10.0)
             e_pnat_inicial = e2.number_input("Preço Nativo Inicial", value=to_float(pool_sel.get("preco_inicial")), format="%.8f")
             e_val_inicial = e_inv.number_input("Investimento Inicial Puro ($)", value=to_float(pool_sel.get("valor_inicial")), step=10.0)
 
@@ -1191,7 +1176,7 @@ with tab_edit:
                 }
                 res = requests.patch(patch_url, headers=headers, json=update_payload)
                 if res.status_code in [200, 204]:
-                    st.success("Alterações guardadas com sucesso!")
+                    st.success("Alterações guardadas!")
                     time.sleep(1)
                     st.rerun()
                 else:
@@ -1199,7 +1184,7 @@ with tab_edit:
 
         st.markdown("---")
         
-        st.markdown("#### 🏁 Encerrar / Arquivar Posição (MET/USDC)")
+        st.markdown("#### 🏁 Encerrar / Arquivar Posição")
         with st.form("form_close_pool"):
             val_fecho_input = st.number_input("Valor Total Sacado ao Fechar ($ USD):", min_value=0.0, value=to_float(pool_sel.get("valor_atual")), step=10.0)
             data_fecho_input = st.date_input("Data de Fecho:", value=get_agora_pt().date())
@@ -1214,7 +1199,7 @@ with tab_edit:
                 }
                 res_c = requests.patch(patch_url, headers=headers, json=close_payload)
                 if res_c.status_code in [200, 204]:
-                    st.success(f"Posição ID {pool_sel['id']} marcada como Fechada e guardada no Supabase!")
+                    st.success(f"Posição ID {pool_sel['id']} encerrada e movida para o histórico!")
                     time.sleep(1)
                     st.rerun()
                 else:
@@ -1242,80 +1227,4 @@ with tab_closed:
         duracao_media = sum(p["dias_corridos"] for p in pools_fechadas_processadas) / total_pools_fechadas
 
         mc1, mc2, mc3, mc4 = st.columns(4)
-        mc1.metric("PnL Realizado Total", f"${total_pnl_fechado:,.2f}")
-        mc2.metric("Win Rate", f"{win_rate:.1f}%", delta=f"{winning_pools}/{total_pools_fechadas} Lucrativas")
-        mc3.metric("Total Pools Fechadas", f"{total_pools_fechadas}")
-        mc4.metric("Duração Média", f"{duracao_media:.1f} dias")
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        df_closed_perf = pd.DataFrame(pools_fechadas_processadas)
-        fig_closed_perf = px.bar(
-            df_closed_perf,
-            x="par",
-            y="pnl_pool",
-            color="pnl_pool",
-            color_continuous_scale=["#ef4444", "#10b981"],
-            title="Performance Individual (PnL Realizado) das Pools Fechadas ($ USD)",
-            text=df_closed_perf["pnl_pool"].apply(lambda x: f"${x:,.2f}")
-        )
-        fig_closed_perf.update_traces(textposition="outside")
-        fig_closed_perf.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="white",
-            margin=dict(l=10, r=10, t=40, b=10),
-            xaxis_title="Par / Pool",
-            yaxis_title="PnL Realizado ($ USD)",
-            coloraxis_showscale=False
-        )
-        st.plotly_chart(fig_closed_perf, use_container_width=True)
-
-        st.markdown("---")
-
-        df_closed = pd.DataFrame(pools_fechadas_processadas)
-        cols_closed_display = {
-            "id": "ID",
-            "par": "Par",
-            "rede": "Rede / Plataforma",
-            "v_inicial_calc": "Capital Investido ($)",
-            "fees_sacadas_calc": "Fees Sacadas ($)",
-            "pnl_pool": "PnL Realizado ($)",
-            "roi_pool": "ROI Realizado (%)",
-            "dias_corridos": "Duração (Dias)"
-        }
-        
-        existing_cols = [c for c in cols_closed_display.keys() if c in df_closed.columns]
-        df_closed_show = df_closed[existing_cols].rename(columns=cols_closed_display)
-        
-        for col in ["Capital Investido ($)", "Fees Sacadas ($)", "PnL Realizado ($)"]:
-            if col in df_closed_show.columns:
-                df_closed_show[col] = df_closed_show[col].apply(lambda x: f"${x:,.2f}")
-        
-        if "ROI Realizado (%)" in df_closed_show.columns:
-            df_closed_show["ROI Realizado (%)"] = df_closed_show["ROI Realizado (%)"].apply(lambda x: f"{x:.2f}%")
-            
-        st.dataframe(df_closed_show, use_container_width=True, hide_index=True)
-    else:
-        st.info("Ainda não existem posições arquivadas como 'Fechadas'.")
-
-with tab_calc:
-    col_c1, col_c2 = st.columns(2)
-
-    with col_c1:
-        st.markdown("#### 🎯 Calculadora de Novos Ranges")
-        p_ref = st.number_input("Preço Nativo Atual", min_value=0.0, value=0.000049, format="%.8f", key="calc_p_ref")
-        var_pct = st.slider("Amplitude (± %)", min_value=1.0, max_value=50.0, value=15.0, step=0.5, key="calc_var_pct")
-
-        if p_ref > 0:
-            novo_min = p_ref * (1 - (var_pct / 100))
-            novo_max = p_ref * (1 + (var_pct / 100))
-            st.write(f"**Novo Range Mínimo (-{var_pct}%):** `{format_crypto_price(novo_min)}`")
-            st.write(f"**Novo Range Máximo (+{var_pct}%):** `{format_crypto_price(novo_max)}`")
-
-    with col_c2:
-        st.markdown("#### 📉 Simulador de IL CLMM / DLMM")
-        var_preco_simulada = st.slider("Variação de Preço (%)", min_value=-80.0, max_value=300.0, value=20.0, step=5.0, key="calc_il_slider")
-        rmin_sim = st.number_input("Range Mínimo (Simulação)", value=0.000030, format="%.8f")
-        rmax_sim = st.number_input("Range Máximo (Simulação)", value=0.000080, format="%.8f")
-        p_atual_sim = 0.000050 * (1.0 + var_preco_simulada /
+        mc1.metric("PnL
