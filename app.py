@@ -1374,4 +1374,132 @@ with tab_table:
 
 with tab_fees_hist:
     st.markdown("#### 📜 Registo Histórico de Saques de Fees")
-    fees_hist_data = get_historico_
+    fees_hist_data = get_historico_fees()
+    if fees_hist_data:
+        df_fees_hist = pd.DataFrame(fees_hist_data)
+        cols_hist = ["data", "par", "valor_usd"]
+        if "qtd_token_a" in df_fees_hist.columns:
+            cols_hist.append("qtd_token_a")
+        if "qtd_token_b" in df_fees_hist.columns:
+            cols_hist.append("qtd_token_b")
+            
+        df_fees_hist = df_fees_hist[cols_hist].rename(columns={
+            "data": "Data do Saque",
+            "par": "Par / Pool",
+            "valor_usd": "Valor Sacado ($ USD)",
+            "qtd_token_a": "Qtd Token Volátil",
+            "qtd_token_b": "Qtd Token Base"
+        })
+        df_fees_hist["Valor Sacado ($ USD)"] = df_fees_hist["Valor Sacado ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        st.dataframe(df_fees_hist, use_container_width=True, hide_index=True)
+    else:
+        st.info("Ainda não existem registos de saques de fees guardados.")
+
+with tab_tokens_summary:
+    st.markdown("#### 📊 Resumo de Tokens Sacados por Pool (Acumulado)")
+    fees_hist_data = get_historico_fees()
+    if fees_hist_data:
+        df_summary = pd.DataFrame(fees_hist_data)
+        
+        df_summary["valor_usd"] = df_summary["valor_usd"].apply(to_float)
+        df_summary["qtd_token_a"] = df_summary.get("qtd_token_a", 0).apply(to_float)
+        df_summary["qtd_token_b"] = df_summary.get("qtd_token_b", 0).apply(to_float)
+        
+        grouped = df_summary.groupby("par").agg(
+            total_saques=("id", "count"),
+            total_usd=("valor_usd", "sum"),
+            total_token_a=("qtd_token_a", "sum"),
+            total_token_b=("qtd_token_b", "sum")
+        ).reset_index()
+
+        grouped_show = grouped.rename(columns={
+            "par": "Par / Pool",
+            "total_saques": "Nº de Saques",
+            "total_token_a": "Total Token Volátil (A)",
+            "total_token_b": "Total Token Base (B)",
+            "total_usd": "Total Valor ($ USD)"
+        })
+
+        grouped_show["Total Valor ($ USD)"] = grouped_show["Total Valor ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        grouped_show["Total Token Volátil (A)"] = grouped_show["Total Token Volátil (A)"].apply(lambda x: f"{x:,.6f}")
+        grouped_show["Total Token Base (B)"] = grouped_show["Total Token Base (B)"].apply(lambda x: f"{x:,.4f}")
+
+        st.dataframe(grouped_show, use_container_width=True, hide_index=True)
+
+        csv_summary = grouped.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Exportar Resumo de Tokens em CSV",
+            data=csv_summary,
+            file_name=f"resumo_tokens_sacados_{get_agora_pt().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("Nenhum histórico de fees disponível para gerar o resumo por token.")
+
+with tab_aportes_hist:
+    st.markdown("#### ➕ Registo Histórico de Aportes")
+    if lista_aportes_raw:
+        df_ap = pd.DataFrame(lista_aportes_raw)
+        mapa_nomes_pools = {p["id"]: p.get("par", f"Pool ID {p['id']}") for p in pools}
+        df_ap["par"] = df_ap["pool_id"].apply(lambda x: mapa_nomes_pools.get(x, f"Pool ID {x}"))
+        
+        df_ap_show = df_ap[["data_aporte", "par", "valor"]].rename(columns={
+            "data_aporte": "Data do Aporte",
+            "par": "Par / Pool",
+            "valor": "Valor do Aporte ($ USD)"
+        })
+        df_ap_show["Valor do Aporte ($ USD)"] = df_ap_show["Valor do Aporte ($ USD)"].apply(lambda x: f"${x:,.2f}")
+        st.dataframe(df_ap_show, use_container_width=True, hide_index=True)
+    else:
+        st.info("Ainda não existem registos de aportes guardados.")
+
+with tab_llama:
+    st.markdown("#### 🦙 Maiores Rendimentos DeFi em Tempo Real (DefiLlama)")
+    data_llama = fetch_defillama_yields()
+    
+    if not data_llama:
+        st.warning("Não foi possível carregar os dados do DefiLlama de momento.")
+    else:
+        df_llama = pd.DataFrame(data_llama)
+        col_f1, col_f2, col_f3 = st.columns(3)
+        
+        chains_disponiveis = sorted(df_llama["chain"].dropna().unique().tolist())
+        default_chains = [c for c in ["Solana", "Ethereum", "Arbitrum"] if c in chains_disponiveis]
+        chain_sel = col_f1.multiselect("Filtrar por Rede (Chain):", chains_disponiveis, default=default_chains)
+        tvl_min = col_f2.number_input("TVL Mínimo ($ USD):", min_value=10000, value=100000, step=50000)
+        ordem_sel = col_f3.selectbox("Ordenar por:", ["APY Total (apy)", "APY Base / Fees (apyBase)", "TVL ($)"])
+
+        df_filtered = df_llama[df_llama["chain"].isin(chain_sel)] if chain_sel else df_llama
+        df_filtered = df_filtered[df_filtered["tvlUsd"] >= tvl_min]
+
+        sort_col = "apy"
+        if ordem_sel == "APY Base / Fees (apyBase)":
+            sort_col = "apyBase"
+        elif ordem_sel == "TVL ($)":
+            sort_col = "tvlUsd"
+
+        df_filtered = df_filtered.sort_values(by=sort_col, ascending=False).head(50)
+        
+        df_filtered["link_llama"] = df_filtered.apply(lambda r: f"https://defillama.com/yields/pool/{r['pool']}", axis=1)
+        
+        cols_map = {
+            "symbol": "Par / Símbolo",
+            "project": "Protocolo",
+            "chain": "Rede",
+            "tvlUsd": "TVL ($)",
+            "apy": "APY Total (%)",
+            "link_llama": "DefiLlama"
+        }
+        
+        df_show = df_filtered[list(cols_map.keys())].rename(columns=cols_map)
+        df_show["TVL ($)"] = df_show["TVL ($)"].apply(lambda x: f"${x:,.0f}")
+        df_show["APY Total (%)"] = df_show["APY Total (%)"].apply(lambda x: f"{x:.2f}%" if pd.notnull(x) else "0.00%")
+
+        st.dataframe(
+            df_show, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "DefiLlama": st.column_config.LinkColumn("DefiLlama", display_text="🦙 Ver Pool")
+            }
+        )
